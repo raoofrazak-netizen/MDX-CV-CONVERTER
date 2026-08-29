@@ -90,14 +90,40 @@ ACTION_VERB_RE = re.compile(
     r"|deployed|tested|documented|monitored|handled|operated)\b",
     re.I,
 )
+# A "SKILLS" heading commonly holds real skill lists in one part of the
+# document and, immediately after, a block of job responsibility bullets
+# that a scrambled layout dropped in the wrong place -- the same class of
+# reading-order scramble ACTION_VERB_RE was already built for, just under a
+# different heading than "Qualifications". "Used Git/GitHub..." is
+# deliberately not caught: it opens with a common verb that just as often
+# names a tool used ("Used Python for...") as a responsibility performed,
+# so it is left as a skill rather than guessed at.
+#
+# A course/certificate/internship one-liner under the same heading
+# ("React.Js Course - Udemy", "Certified Digital Marketing Manager -
+# Certification Course") is training, not a skill -- it belongs with the
+# CV's other credentials in Qualifications, the same section "Additional
+# Certificates"-style headings already route to.
+TRAINING_LINE_RE = re.compile(
+    # apply_routing() checks with re.match (anchored at the start), so the
+    # "anywhere in the line" alternative needs its own leading .* -- without
+    # it, "AI Dashboards using Power BI - Certification" doesn't match even
+    # though the word is right there, just not at position 0.
+    r".*\b(?:certification|certificate|certified)\b"
+    r"|[\w .&'/-]+\bcourse\b\s*-\s*\S"
+    r"|.*-\s*(?:internship|certification|course)\s*$",
+    re.I,
+)
+
 SCOPED_RULES: list[tuple[re.Pattern, str, set[str]]] = [
-    (ACTION_VERB_RE, "previous_employment", {"qualifications"}),
+    (ACTION_VERB_RE, "previous_employment", {"qualifications", "skills"}),
+    (TRAINING_LINE_RE, "qualifications", {"skills"}),
 ]
 
 ROUTABLE_SOURCE_SECTIONS = {
     "academic_leadership", "committees", "knowledge_exchange", "associations",
     "centres_of_excellence", "editorial_roles", "awards", "teaching_learning",
-    "qualifications", "present_employment", "previous_employment",
+    "qualifications", "present_employment", "previous_employment", "skills",
 }
 
 # Never move an item OUT of a section the CV named explicitly, and never
