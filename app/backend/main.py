@@ -7,9 +7,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 import commands
+import insights
 import profiles
 import storage
 import template_engine
+import validation
 from config import (
     ALLOWED_EXTENSIONS, FRONTEND_DIR, GENERATED_DIR, MAX_UPLOAD_MB, PHOTOS_DIR, SECTION_KEYS, SECTIONS,
     UPLOADS_DIR,
@@ -165,6 +167,40 @@ def delete_photo(cv_id: str):
     storage.set_cv_photo(cv_id, None)
     storage.log_event(cv_id, "photo_removed")
     return {"cv_id": cv_id, "photo_uploaded": False}
+
+
+@app.get("/api/cv/{cv_id}/audit-log")
+def get_audit_log(cv_id: str):
+    cv = storage.get_cv(cv_id)
+    if not cv:
+        raise _user_error("CV not found.", 404)
+    return storage.get_audit_log(cv_id)
+
+
+@app.get("/api/unmapped-headings-summary")
+def unmapped_headings_summary():
+    rows = storage.list_unmapped_items_with_cv()
+    taught = {m["heading_text"].casefold() for m in storage.list_heading_mappings()}
+    return insights.summarize_unmapped_headings(rows, taught)
+
+
+@app.get("/api/settings/auto-approval-threshold")
+def get_auto_approval_threshold():
+    return {"threshold": validation.auto_approve_threshold()}
+
+
+@app.put("/api/settings/auto-approval-threshold")
+def set_auto_approval_threshold(payload: dict):
+    try:
+        value = float(payload.get("threshold"))
+    except (TypeError, ValueError):
+        raise _user_error("threshold must be a number.")
+    if value <= 0:
+        raise _user_error("threshold must be greater than 0.")
+    # HANDOVER.md §3 already documents that a value above 1.0 means "never
+    # auto-approve anything" -- allowed deliberately, not a bug.
+    storage.set_setting("auto_approve_min_confidence", str(value))
+    return {"threshold": value}
 
 
 @app.get("/api/cv/{cv_id}/photo")

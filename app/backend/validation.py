@@ -123,7 +123,24 @@ ADVISORY_FLAGS = {"low_confidence", "medium_confidence"}
 # Below this, an item is never auto-approved: the classifier was guessing
 # (a job title inferred from an employment line, an entry recovered from an
 # unlabelled block) and a human should look before it reaches the document.
-AUTO_APPROVE_MIN_CONFIDENCE = 0.75
+AUTO_APPROVE_MIN_CONFIDENCE = 0.75  # fallback default -- unchanged behaviour
+
+
+def auto_approve_threshold() -> float:
+    """The live threshold, or the original hardcoded default if HR has
+    never set one. This is the ONLY place the threshold is read from now
+    on -- needs_human_review() below calls this instead of the constant
+    directly, mirroring the pattern rule_classifier.py already uses for
+    HR-taught heading mappings: inert (falls back to prior behaviour)
+    until someone explicitly sets a value, and live immediately after."""
+    import storage
+    raw = storage.get_setting("auto_approve_min_confidence")
+    if raw is None:
+        return AUTO_APPROVE_MIN_CONFIDENCE
+    try:
+        return float(raw)
+    except ValueError:
+        return AUTO_APPROVE_MIN_CONFIDENCE
 
 
 def needs_human_review(item: dict[str, Any]) -> bool:
@@ -134,7 +151,7 @@ def needs_human_review(item: dict[str, Any]) -> bool:
     is data entry, not review: it buries the handful of entries that are
     genuinely uncertain in a sea of ones that are obviously right.
     """
-    if item.get("confidence", 0.0) < AUTO_APPROVE_MIN_CONFIDENCE:
+    if item.get("confidence", 0.0) < auto_approve_threshold():
         return True
     return bool(set(item.get("validation_flags", [])) - ADVISORY_FLAGS)
 

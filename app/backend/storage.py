@@ -61,6 +61,14 @@ CREATE TABLE IF NOT EXISTS custom_heading_mappings (
     section_key TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+-- Operator-configurable settings, e.g. the auto-approval confidence
+-- threshold. Key/value so a new setting never needs a schema migration.
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -294,6 +302,54 @@ def list_heading_mappings() -> list[dict[str, Any]]:
 def delete_heading_mapping(mapping_id: str) -> None:
     with get_conn() as conn:
         conn.execute("DELETE FROM custom_heading_mappings WHERE mapping_id = ?", (mapping_id,))
+
+
+def get_setting(key: str, default: str | None = None) -> str | None:
+    try:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT value FROM app_settings WHERE key = ?", (key,)
+            ).fetchone()
+            return row["value"] if row else default
+    except sqlite3.OperationalError:
+        # app_settings doesn't exist yet (e.g. a test harness that talks to
+        # validation.py directly without calling storage.init_db() first).
+        # Falling back to the caller's default here, rather than raising,
+        # is what keeps this change invisible to every existing test and
+        # every CV processed before a setting is ever written.
+        return default
+
+
+def set_setting(key: str, value: str) -> None:
+    from datetime import datetime, timezone
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)
+               ON CONFLICT(key) DO UPDATE SET
+                 value = excluded.value, updated_at = excluded.updated_at""",
+            (key, value, datetime.now(timezone.utc).isoformat()),
+        )
+
+
+def get_audit_log(cv_id: str) -> list[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, cv_id, at, action, detail FROM audit_log "
+            "WHERE cv_id = ? ORDER BY at ASC",
+            (cv_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_unmapped_items_with_cv() -> list[dict]:
+    """Raw rows for the cross-CV dashboard. Returns fields as a JSON
+    string -- decoding is insights.py's job, not storage's, matching how
+    _row_to_item() is the only place that decodes elsewhere."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT cv_id, fields FROM items WHERE section = 'unmapped'"
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def _row_to_item(row: sqlite3.Row) -> dict[str, Any]:
