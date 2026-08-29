@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Staff Profiles — MDX Faculty CV Converter</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="swatch"></span> MDX Faculty CV Converter</div>
+  <nav>
+    <a href="index.html">Upload &amp; History</a>
+    <a href="profiles.html">Staff Profiles</a>
+  </nav>
+</header>
+
+<main>
+  <h1>Staff profiles</h1>
+  <p class="lede">Details no CV reliably carries — MDX email, desk phone, ORCID/LinkedIn and other identifiers, and professional memberships — saved once per person and reapplied automatically on every future upload.</p>
+
+  <div id="errorArea"></div>
+
+  <div class="top-actions">
+    <h2 style="margin:0;">Profiles</h2>
+    <button class="btn-primary" id="newProfileBtn">New profile</button>
+  </div>
+  <div class="card" style="padding:0;">
+    <table id="profilesTable">
+      <thead>
+        <tr><th>Name</th><th>Job title</th><th>Email</th><th>Last updated</th><th></th></tr>
+      </thead>
+      <tbody id="profilesBody"></tbody>
+    </table>
+    <div id="profilesEmpty" class="empty-note" style="display:none;">No staff profiles saved yet.</div>
+  </div>
+
+  <div class="card" id="editCard" style="display:none;">
+    <h2 id="editTitle">New profile</h2>
+    <form id="editForm">
+      <div class="item-row" style="padding:0; border:none;">
+        <label class="muted">Full name</label>
+        <input type="text" id="fldFullName" required>
+        <p class="muted" id="nameLockedNote" style="display:none; margin:0;">
+          To rename, delete this profile and create a new one — the profile's id is derived from its name, and a future CV can only be matched against the id it was saved under.
+        </p>
+      </div>
+      <div class="item-row" style="padding:0.6rem 0 0; border:none;">
+        <label class="muted">Job title</label>
+        <input type="text" id="fldJobTitle">
+      </div>
+      <div class="item-row" style="padding:0.6rem 0 0; border:none;">
+        <label class="muted">MDX email</label>
+        <input type="text" id="fldEmail">
+      </div>
+      <div class="item-row" style="padding:0.6rem 0 0; border:none;">
+        <label class="muted">Desk phone</label>
+        <input type="text" id="fldPhone">
+      </div>
+
+      <h3 style="margin:1.2rem 0 0.4rem; font-size:0.95rem;">Links</h3>
+      <div id="linkFields"></div>
+
+      <h3 style="margin:1.2rem 0 0.4rem; font-size:0.95rem;">Memberships</h3>
+      <div id="membershipRows"></div>
+      <button type="button" class="btn-secondary btn-sm" id="addMembershipBtn" style="margin-top:0.4rem;">Add membership</button>
+
+      <div class="item-top" style="margin-top:1.4rem;">
+        <div class="actions">
+          <button class="btn-primary btn-sm" type="submit">Save profile</button>
+          <button class="btn-secondary btn-sm" type="button" id="cancelEditBtn">Cancel</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</main>
+
+<script src="app.js"></script>
+<script>
+// Mirrors profiles.profile_id_for() exactly: strip a leading honorific,
+// lowercase, collapse non-alphanumerics to hyphens. Only used when
+// CREATING a new profile, where the id has to be derived client-side
+// before the first PUT -- see the "one design decision" note below.
+const HONORIFIC_RE = /^(?:dr|prof|professor|mr|mrs|ms|miss|sir|dame)\.?\s+/i;
+function profileIdFor(fullName) {
+  const name = (fullName || "").trim().replace(HONORIFIC_RE, "");
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+const LINK_LABELS = {
+  orcid: "ORCID", linkedin: "LinkedIn", scopus: "Scopus",
+  google_scholar: "Google Scholar", repository: "Research Repository", website: "Website",
+};
+
+let editingProfileId = null;   // null = creating a new profile
+
+async function loadProfiles() {
+  const body = document.getElementById("profilesBody");
+  const empty = document.getElementById("profilesEmpty");
+  try {
+    const profiles = await apiFetch("/api/profiles");
+    if (!profiles.length) {
+      body.innerHTML = "";
+      empty.style.display = "block";
+      return;
+    }
+    empty.style.display = "none";
+    body.innerHTML = profiles.map(p => `
+      <tr>
+        <td>${p.full_name}</td>
+        <td>${p.job_title || ""}</td>
+        <td>${p.mdx_email || ""}</td>
+        <td>${fmtDate(p.updated_at)}</td>
+        <td style="display:flex; gap:0.4rem;">
+          <button class="btn-secondary btn-sm act-edit" data-id="${p.profile_id}">Edit</button>
+          <button class="btn-danger btn-sm act-delete" data-id="${p.profile_id}">Delete</button>
+        </td>
+      </tr>
+    `).join("");
+    body.querySelectorAll(".act-edit").forEach(btn =>
+      btn.addEventListener("click", () => openEdit(btn.dataset.id)));
+    body.querySelectorAll(".act-delete").forEach(btn =>
+      btn.addEventListener("click", () => onDeleteProfile(btn.dataset.id)));
+  } catch (err) {
+    body.innerHTML = `<tr><td colspan="5"><div class="error-banner">${err.message}</div></td></tr>`;
+  }
+}
+
+function renderLinkFields(links) {
+  const container = document.getElementById("linkFields");
+  container.innerHTML = Object.entries(LINK_LABELS).map(([key, label]) => `
+    <div class="item-row" style="padding:0.3rem 0; border:none;">
+      <label class="muted">${label}</label>
+      <input type="text" class="link-field" data-key="${key}" value="${(links[key] || "").replace(/"/g, "&quot;")}">
+    </div>
+  `).join("");
+}
+
+function renderMembershipRows(memberships) {
+  const container = document.getElementById("membershipRows");
+  const rows = memberships.length ? memberships : [""];
+  container.innerHTML = rows.map(m => `
+    <div class="item-top" style="margin-bottom:0.4rem;">
+      <input type="text" class="membership-field" value="${(m || "").replace(/"/g, "&quot;")}" style="flex:1;">
+      <button type="button" class="btn-danger btn-sm act-remove-membership">Remove</button>
+    </div>
+  `).join("");
+  container.querySelectorAll(".act-remove-membership").forEach(btn =>
+    btn.addEventListener("click", () => btn.closest(".item-top").remove()));
+}
+
+document.getElementById("addMembershipBtn").addEventListener("click", () => {
+  const container = document.getElementById("membershipRows");
+  const row = document.createElement("div");
+  row.className = "item-top";
+  row.style.marginBottom = "0.4rem";
+  row.innerHTML = `<input type="text" class="membership-field" style="flex:1;">
+                    <button type="button" class="btn-danger btn-sm act-remove-membership">Remove</button>`;
+  row.querySelector(".act-remove-membership").addEventListener("click", () => row.remove());
+  container.appendChild(row);
+});
+
+function openNew() {
+  editingProfileId = null;
+  document.getElementById("editTitle").textContent = "New profile";
+  document.getElementById("fldFullName").value = "";
+  document.getElementById("fldFullName").disabled = false;
+  document.getElementById("nameLockedNote").style.display = "none";
+  document.getElementById("fldJobTitle").value = "";
+  document.getElementById("fldEmail").value = "";
+  document.getElementById("fldPhone").value = "";
+  renderLinkFields({});
+  renderMembershipRows([]);
+  document.getElementById("editCard").style.display = "block";
+  document.getElementById("editCard").scrollIntoView({ behavior: "smooth" });
+}
+
+async function openEdit(profileId) {
+  try {
+    const p = await apiFetch(`/api/profiles/${profileId}`);
+    editingProfileId = p.profile_id;
+    document.getElementById("editTitle").textContent = `Edit ${p.full_name}`;
+    document.getElementById("fldFullName").value = p.full_name;
+    // Renaming in place, without also changing the profile's id, would
+    // silently break future CV matching: profiles.profile_id_for()
+    // re-derives the id from whatever name a NEW CV carries and looks it
+    // up, but PUT writes to whatever id is already in the URL and never
+    // recomputes it from a changed name in the payload. Name is only
+    // editable when creating a brand-new profile, where the id is derived
+    // fresh alongside it.
+    document.getElementById("fldFullName").disabled = true;
+    document.getElementById("nameLockedNote").style.display = "block";
+    document.getElementById("fldJobTitle").value = p.job_title || "";
+    document.getElementById("fldEmail").value = p.mdx_email || "";
+    document.getElementById("fldPhone").value = p.desk_phone || "";
+    renderLinkFields(p.links || {});
+    renderMembershipRows(p.memberships || []);
+    document.getElementById("editCard").style.display = "block";
+    document.getElementById("editCard").scrollIntoView({ behavior: "smooth" });
+  } catch (err) {
+    document.getElementById("errorArea").innerHTML = `<div class="error-banner">${err.message}</div>`;
+  }
+}
+
+document.getElementById("newProfileBtn").addEventListener("click", openNew);
+document.getElementById("cancelEditBtn").addEventListener("click", () => {
+  document.getElementById("editCard").style.display = "none";
+});
+
+document.getElementById("editForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  document.getElementById("errorArea").innerHTML = "";
+  const fullName = document.getElementById("fldFullName").value.trim();
+  if (!fullName) return;
+  const profileId = editingProfileId || profileIdFor(fullName);
+  const links = {};
+  document.querySelectorAll(".link-field").forEach(inp => {
+    const v = inp.value.trim();
+    if (v) links[inp.dataset.key] = v;
+  });
+  const memberships = Array.from(document.querySelectorAll(".membership-field"))
+    .map(inp => inp.value.trim())
+    .filter(Boolean);
+
+  const payload = {
+    full_name: fullName,
+    job_title: document.getElementById("fldJobTitle").value.trim(),
+    mdx_email: document.getElementById("fldEmail").value.trim(),
+    desk_phone: document.getElementById("fldPhone").value.trim(),
+    links, memberships,
+  };
+  try {
+    await apiFetch(`/api/profiles/${profileId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    document.getElementById("editCard").style.display = "none";
+    await loadProfiles();
+  } catch (err) {
+    document.getElementById("errorArea").innerHTML = `<div class="error-banner">${err.message}</div>`;
+  }
+});
+
+async function onDeleteProfile(profileId) {
+  if (!confirm("Delete this profile? Future uploads for this person will no longer be prefilled.")) return;
+  try {
+    await apiFetch(`/api/profiles/${profileId}`, { method: "DELETE" });
+    await loadProfiles();
+  } catch (err) {
+    document.getElementById("errorArea").innerHTML = `<div class="error-banner">${err.message}</div>`;
+  }
+}
+
+loadProfiles();
+</script>
+</body>
+</html>
