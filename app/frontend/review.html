@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Review CV — MDX Faculty CV Converter</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="swatch"></span> MDX Faculty CV Converter</div>
+  <nav><a href="index.html">Upload &amp; History</a></nav>
+</header>
+
+<main>
+  <div id="errorArea"></div>
+
+  <div class="top-actions">
+    <div>
+      <h1 id="fileName">Loading…</h1>
+      <p class="muted" id="statusLine"></p>
+    </div>
+    <div style="display:flex; gap:0.6rem;">
+      <button class="btn-secondary" id="refreshBtn">Refresh</button>
+      <button class="btn-primary" id="generateBtn" disabled>Generate MDX CV</button>
+    </div>
+  </div>
+
+  <div class="progress-steps" id="progressSteps"></div>
+
+  <div class="card review-bar" id="reviewBar" style="display:none;">
+    <div class="review-bar-status">
+      <strong id="reviewHeadline"></strong>
+      <span class="muted" id="reviewSubline"></span>
+    </div>
+    <div class="review-bar-actions">
+      <button class="btn-secondary btn-sm" id="bulkApproveBtn">Approve all remaining</button>
+      <button class="btn-secondary btn-sm" id="jumpNextBtn">Jump to next needing review</button>
+      <button class="btn-secondary btn-sm" id="shortcutsBtn">Keyboard shortcuts</button>
+    </div>
+    <form class="command-bar" id="commandBar" autocomplete="off">
+      <input type="text" id="commandInput"
+             placeholder="Type a command…  e.g. “approve publications”, “add Best Paper Award 2025 to awards”">
+      <button class="btn-secondary btn-sm" type="submit">Run</button>
+    </form>
+    <div class="command-result" id="commandResult" style="display:none;"></div>
+
+    <div class="shortcut-help" id="shortcutHelp" style="display:none;">
+      <span><kbd>J</kbd> / <kbd>K</kbd> next / previous</span>
+      <span><kbd>A</kbd> approve</span>
+      <span><kbd>E</kbd> edit</span>
+      <span><kbd>R</kbd> reject</span>
+      <span><kbd>Esc</kbd> leave edit box</span>
+    </div>
+  </div>
+
+  <div class="workspace" id="workspace">
+    <aside class="source-pane" id="sourcePane">
+      <div class="source-pane-head">
+        <strong>Original CV</strong>
+        <button class="btn-secondary btn-sm" id="togglePaneBtn">Hide</button>
+      </div>
+      <div class="source-pane-body" id="sourcePaneBody">
+        <p class="muted">Loading preview…</p>
+      </div>
+    </aside>
+
+    <div class="review-pane">
+      <div class="card" id="qualityCard" style="display:none;">
+        <h2>Quality report</h2>
+        <p class="muted" id="qrSummary"></p>
+        <div class="qr-grid" id="qrGrid"></div>
+        <div id="downloadArea"></div>
+      </div>
+
+      <div id="sectionsArea"></div>
+    </div>
+  </div>
+</main>
+
+<script src="app.js"></script>
+<script>
+const params = new URLSearchParams(window.location.search);
+const cvId = params.get("cv_id");
+let sectionDefs = [];
+let sourcePreviewLoaded = false;   // preview is static; load once, not on every poll
+
+if (!cvId) {
+  document.getElementById("errorArea").innerHTML = `<div class="error-banner">No CV specified.</div>`;
+}
+
+const PIPELINE_STEPS = [
+  { key: "uploaded", label: "File Uploaded" },
+  { key: "extracted", label: "Text Extracted" },
+  { key: "validation_required", label: "Classification Complete" },
+  { key: "review", label: "Ready for Review" },
+  { key: "generated", label: "MDX CV Generated" },
+];
+
+function renderProgress(status) {
+  const order = PIPELINE_STEPS.map(s => s.key);
+  let activeIdx = order.indexOf(status);
+  if (status === "downloaded") activeIdx = order.length - 1;
+  if (status === "processing") activeIdx = 0;
+  const el = document.getElementById("progressSteps");
+  el.innerHTML = PIPELINE_STEPS.map((s, i) => {
+    let cls = "step";
+    if (i < activeIdx) cls += " done";
+    else if (i === activeIdx) cls += " active";
+    const mark = i < activeIdx ? "✓ " : (i === activeIdx ? "● " : "○ ");
+    return `<span class="${cls}">${mark}${s.label}</span>`;
+  }).join("");
+}
+
+async function loadSectionDefs() {
+  sectionDefs = await apiFetch("/api/sections");
+}
+
+async function loadAll() {
+  try {
+    const cv = await apiFetch(`/api/cv/${cvId}`);
+    if (!sourcePreviewLoaded) { sourcePreviewLoaded = true; loadSourcePreview(cv); }
+    document.getElementById("fileName").textContent = cv.original_filename;
+    document.getElementById("statusLine").innerHTML =
+      `${pill(statusLabel(cv.status), cv.status)} &nbsp; uploaded ${fmtDate(cv.uploaded_at)}`;
+    renderProgress(cv.status);
+
+    if (cv.status === "failed") {
+      document.getElementById("errorArea").innerHTML =
+        `<div class="error-banner"><strong>Processing failed:</strong> ${cv.error_message || "Unknown error."}</div>`;
+      document.getElementById("sectionsArea").innerHTML = "";
+      return;
+    }
+    if (["uploaded", "processing"].includes(cv.status)) {
+      document.getElementById("sectionsArea").innerHTML = `<div class="card muted">Processing this CV — extraction and classification are running. This page refreshes automatically.</div>`;
+      return;
+    }
+
+    const [items, report] = await Promise.all([
+      apiFetch(`/api/cv/${cvId}/items`),
+      apiFetch(`/api/cv/${cvId}/quality-report`),
+    ]);
+
+    renderReviewBar(report);
+    renderQuality(report, cv.status);
+    renderSections(items, cv);
+    restoreFocus();
+  } catch (err) {
+    document.getElementById("errorArea").innerHTML = `<div class="error-banner">${err.message}</div>`;
+  }
+}
+
+function renderReviewBar(report) {
+  const bar = document.getElementById("reviewBar");
+  bar.style.display = "block";
+  const pending = report.pending_count ?? 0;
+  const auto = report.auto_approved_count ?? 0;
+  const total = report.total_items ?? 0;
+
+  // "All 0 items reviewed - ready to generate" is actively misleading: an
+  // empty extraction is a failure, not a finished review.
+  const headline = total === 0
+    ? "No content could be read from this document."
+    : pending === 0
+      ? `All ${total} items reviewed — ready to generate.`
+      : `${pending} item${pending === 1 ? "" : "s"} need${pending === 1 ? "s" : ""} your review`;
+  const subline = total === 0
+    ? "The file may be a scan, be image-only, or store its text in a format this tool cannot read. Try uploading a PDF or a Word file with selectable text."
+    : pending === 0
+      ? ""
+      : `${auto} of ${total} were auto-approved (high confidence, no data issues).`;
+
+  document.getElementById("reviewHeadline").textContent = headline;
+  document.getElementById("reviewSubline").textContent = subline;
+  document.getElementById("bulkApproveBtn").style.display = pending ? "" : "none";
+  document.getElementById("jumpNextBtn").style.display = pending ? "" : "none";
+}
+
+function renderQuality(report, cvStatus) {
+  const card = document.getElementById("qualityCard");
+  card.style.display = "block";
+  // Coverage is reported separately from confidence because they answer
+  // different questions. Confidence is "how sure are we about what we
+  // filed"; coverage is "how much of the CV reached a real section at all".
+  // A CV can be highly confident and poorly covered -- a two-column layout
+  // extracts cleanly but scrambles, so most of it ends in the unmapped note.
+  const unmapped = report.unmapped_count ?? 0;
+  const coverage = report.coverage ?? 1;
+  let summary =
+    `Overall confidence: ${(report.overall_confidence * 100).toFixed(0)}% — ` +
+    (report.ready_to_download ? "ready to generate." : "resolve flagged items below before generating.");
+  if (unmapped > 0) {
+    summary += ` ${(coverage * 100).toFixed(0)}% of extracted content mapped to an MDX section; ` +
+      `${unmapped} item${unmapped === 1 ? "" : "s"} will not appear in the generated document unless moved to a real section.`;
+  }
+  document.getElementById("qrSummary").textContent = summary;
+
+  // Unmapped Information is excluded from this checklist specifically: it
+  // never appears in the generated document (see §5c), so listing it here
+  // with the exact same "missing" / "needs review" styling as a real MDX
+  // section reads as if it's part of the CV structure and something is
+  // wrong with it -- when it's neither. It's still fully reviewable in its
+  // own section further down the page; only this at-a-glance checklist,
+  // which is specifically about what will be IN the document, excludes it.
+  document.getElementById("qrGrid").innerHTML = report.sections
+    .filter(s => s.section !== "unmapped")
+    .map(s => {
+      const icon = s.status === "verified" ? "✓" : (s.status === "needs_review" ? "⚠" : "✕");
+      return `<div class="qr-item"><span>${icon} ${s.label}</span>${pill(s.status.replace("_"," "), s.status)}</div>`;
+    }).join("");
+
+  const genBtn = document.getElementById("generateBtn");
+  genBtn.disabled = !report.ready_to_download;
+
+  const downloadArea = document.getElementById("downloadArea");
+  if (cvStatus === "generated" || cvStatus === "downloaded") {
+    downloadArea.innerHTML = `<p style="margin-top:1rem;"><a class="btn btn-primary" href="/api/cv/${cvId}/download">Download MDX CV (.docx)</a></p>`;
+  } else {
+    downloadArea.innerHTML = "";
+  }
+}
+
+function fieldEditorRow(item) {
+  const flagsHtml = item.validation_flags.length
+    ? `<div class="flags">${item.validation_flags.map(f => `<span class="flag">${f.replaceAll("_"," ")}</span>`).join("")}</div>`
+    : "";
+  const sectionOptions = sectionDefs
+    .filter(s => s.heading_text || ["full_name","job_title","contact_info","email"].includes(s.key))
+    .map(s => `<option value="${s.key}" ${s.key === item.section ? "selected" : ""}>${s.label}</option>`)
+    .join("");
+
+  return `
+    <div class="item-row" data-item-id="${item.item_id}" data-status="${item.status}">
+      <div class="item-top">
+        ${pill(item.confidence_band, item.confidence_band)}
+        ${pill(statusLabel(item.status), item.status)}
+        <span class="muted" style="margin-left:auto;">${Math.round(item.confidence * 100)}% confidence</span>
+      </div>
+      <textarea rows="2" class="line-input">${item.display_line}</textarea>
+      <details class="source"><summary>Source text</summary>${item.source.raw_text}</details>
+      ${flagsHtml}
+      <div class="item-top">
+        <select class="move-select">${sectionOptions}</select>
+        <div class="actions">
+          <button class="btn-secondary btn-sm act-save">Save edit</button>
+          <button class="btn-secondary btn-sm act-approve">Approve</button>
+          <button class="btn-danger btn-sm act-reject">Reject</button>
+          <button class="btn-danger btn-sm act-delete">Delete</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function photoSectionBlock(cv) {
+  const hasPhoto = cv.photo_path;
+  const preview = hasPhoto
+    ? `<img src="/api/cv/${cvId}/photo?ts=${Date.now()}" alt="Profile photo" class="photo-preview">`
+    : `<div class="photo-preview photo-preview-empty">No photo</div>`;
+  return `
+    <div class="section-block" data-section="profile_photo">
+      <div class="section-header">
+        <h3>Profile Photo</h3>
+        <span class="count">${hasPhoto ? "1 photo" : "0 items"}</span>
+      </div>
+      <div class="photo-widget">
+        ${preview}
+        <div class="photo-widget-actions">
+          <p class="muted" style="margin:0 0 0.5rem;">
+            ${hasPhoto
+              ? "Auto-detected from the source CV, or uploaded manually. Replace it if it's the wrong image."
+              : "No photo was found automatically in the source CV. Upload one directly."}
+          </p>
+          <input type="file" id="photoFileInput" accept="image/png,image/jpeg" style="display:block; margin-bottom:0.5rem;">
+          <div style="display:flex; gap:0.5rem;">
+            <button class="btn-secondary btn-sm" id="photoUploadBtn">${hasPhoto ? "Replace photo" : "Upload photo"}</button>
+            ${hasPhoto ? `<button class="btn-danger btn-sm" id="photoRemoveBtn">Remove</button>` : ""}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Distinct unmapped-context strings for the current CV, indexed so a click
+// handler can read the real text back without round-tripping it through an
+// HTML attribute (context text comes straight from the source CV and may
+// contain quote characters that would otherwise break out of one).
+let teachHeadingContexts = [];
+
+function renderTeachHeadingPanel(items) {
+  teachHeadingContexts = [...new Set(
+    items.map(i => (i.fields && i.fields.context) || "").filter(Boolean)
+  )];
+  if (!teachHeadingContexts.length) return "";
+
+  const sectionOptions = sectionDefs
+    .filter(s => s.key !== "unmapped" && s.key !== "profile_photo")
+    .map(s => `<option value="${s.key}">${s.label}</option>`)
+    .join("");
+
+  const rows = teachHeadingContexts.map((ctx, i) => `
+    <div class="teach-row">
+      <span class="teach-heading-label"></span>
+      <span class="muted">always file under</span>
+      <select class="teach-select" data-context-index="${i}">${sectionOptions}</select>
+      <button class="btn-secondary btn-sm act-teach-heading" data-context-index="${i}">Teach this heading</button>
+      <span class="teach-confirm muted" data-context-index="${i}" style="display:none;"></span>
+    </div>`).join("");
+
+  return `
+    <div class="teach-panel">
+      <p class="muted" style="margin:0.5rem 0;">
+        Recognise one of these source headings permanently — for every CV uploaded from now on, not just this one:
+      </p>
+      ${rows}
+    </div>`;
+}
+
+// The heading text itself is set as textContent (not innerHTML) right after
+// render, for the same reason the select's options are built from an index
+// rather than the raw string -- avoids ever treating source CV text as markup.
+function fillTeachHeadingLabels() {
+  document.querySelectorAll(".teach-row .teach-heading-label").forEach((el, i) => {
+    el.textContent = `“${teachHeadingContexts[i]}”`;
+  });
+}
+
+async function onTeachHeading(e) {
+  const idx = Number(e.target.dataset.contextIndex);
+  const headingText = teachHeadingContexts[idx];
+  const row = e.target.closest(".teach-row");
+  const select = row.querySelector(".teach-select");
+  const sectionKey = select.value;
+  const confirmEl = row.querySelector(".teach-confirm");
+  e.target.disabled = true;
+  try {
+    await apiFetch("/api/heading-mappings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ heading_text: headingText, section_key: sectionKey }),
+    });
+    const label = select.options[select.selectedIndex].text;
+    confirmEl.textContent = `Saved — future uploads with this heading go to ${label}.`;
+    confirmEl.style.display = "";
+  } catch (err) {
+    confirmEl.textContent = err.message;
+    confirmEl.style.display = "";
+    e.target.disabled = false;
+  }
+}
+
+function renderSections(itemsBySection, cv) {
+  const container = document.getElementById("sectionsArea");
+  container.innerHTML = sectionDefs.map(sec => {
+    if (sec.key === "profile_photo") return photoSectionBlock(cv);
+
+    const items = itemsBySection[sec.key] || [];
+    // Two empty states now, not three -- every section (official, Skills,
+    // Language Proficiency) behaves the same way when empty: it simply
+    // doesn't appear in the generated document, heading included. Only
+    // Unmapped Information's empty state means something different (the
+    // good news that nothing was left over).
+    const emptyNote = sec.key === "unmapped"
+      ? "Nothing was left over — every line of the source CV reached a section."
+      : "Not found in this CV. This section — heading included — will not appear in the generated document.";
+    const rows = items.length
+      ? (sec.key === "unmapped"
+          ? `<div class="empty-note"><strong>Content from the CV that fits no official MDX section — this does not appear anywhere in the generated document.</strong> Move whatever is real content to the section it actually belongs in (or teach the heading below, so future CVs classify it correctly on their own); reject the rest as noise. Leaving an item here and approving it still leaves it out of the download — approving only marks it reviewed.</div>`
+            + renderTeachHeadingPanel(items)
+          : "") + items.map(fieldEditorRow).join("")
+      : `<div class="empty-note">${emptyNote}</div>`;
+    const pendingHere = items.filter(i => i.status === "pending_review").length;
+    const sectionBulk = pendingHere
+      ? `<button class="btn-secondary btn-sm act-approve-section" data-section="${sec.key}">Approve ${pendingHere} pending</button>`
+      : "";
+    return `
+      <div class="section-block" data-section="${sec.key}">
+        <div class="section-header">
+          <h3>${sec.label}</h3>
+          <span class="count">${items.length} item${items.length === 1 ? "" : "s"}</span>
+          ${sectionBulk}
+        </div>
+        ${rows}
+        <div class="item-row">
+          <div class="item-top">
+            <input type="text" class="add-input" placeholder="Add missing item to this section…" style="flex:1;">
+            <button class="btn-secondary btn-sm act-add">Add</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  container.querySelectorAll(".act-save").forEach(btn => btn.addEventListener("click", onSave));
+  container.querySelectorAll(".act-approve").forEach(btn => btn.addEventListener("click", onApprove));
+  container.querySelectorAll(".act-reject").forEach(btn => btn.addEventListener("click", onReject));
+  container.querySelectorAll(".act-delete").forEach(btn => btn.addEventListener("click", onDelete));
+  container.querySelectorAll(".move-select").forEach(sel => sel.addEventListener("change", onMove));
+  container.querySelectorAll(".act-add").forEach(btn => btn.addEventListener("click", onAdd));
+  container.querySelectorAll(".act-approve-section").forEach(btn =>
+    btn.addEventListener("click", onApproveSection));
+  container.querySelectorAll(".act-teach-heading").forEach(btn =>
+    btn.addEventListener("click", onTeachHeading));
+  fillTeachHeadingLabels();
+  container.querySelectorAll(".item-row[data-item-id]").forEach(row =>
+    row.addEventListener("click", () => setFocus(row, { scroll: false })));
+
+  const uploadBtn = document.getElementById("photoUploadBtn");
+  if (uploadBtn) uploadBtn.addEventListener("click", onPhotoUpload);
+  const removeBtn = document.getElementById("photoRemoveBtn");
+  if (removeBtn) removeBtn.addEventListener("click", onPhotoRemove);
+}
+
+async function onPhotoUpload() {
+  const input = document.getElementById("photoFileInput");
+  const file = input.files[0];
+  if (!file) {
+    document.getElementById("errorArea").innerHTML = `<div class="error-banner">Choose an image file first.</div>`;
+    return;
+  }
+  const formData = new FormData();
+  formData.append("file", file);
+  try {
+    await apiFetch(`/api/cv/${cvId}/photo`, { method: "POST", body: formData });
+    await loadAll();
+  } catch (err) {
+    document.getElementById("errorArea").innerHTML = `<div class="error-banner">${err.message}</div>`;
+  }
+}
+
+async function onPhotoRemove() {
+  try {
+    await apiFetch(`/api/cv/${cvId}/photo`, { method: "DELETE" });
+    await loadAll();
+  } catch (err) {
+    document.getElementById("errorArea").innerHTML = `<div class="error-banner">${err.message}</div>`;
+  }
+}
+
+function itemIdFrom(el) { return el.closest(".item-row").dataset.itemId; }
+
+async function onSave(e) {
+  const row = e.target.closest(".item-row");
+  const text = row.querySelector(".line-input").value.trim();
+  await patchAndReload(itemIdFrom(e.target), { fields: { _line_override: text } });
+}
+async function onApprove(e) {
+  await patchAndReload(itemIdFrom(e.target), { status: "approved" });
+}
+async function onReject(e) {
+  await patchAndReload(itemIdFrom(e.target), { status: "rejected" });
+}
+async function onMove(e) {
+  const row = e.target.closest(".item-row");
+  await patchAndReload(row.dataset.itemId, { section: e.target.value });
+}
+async function onDelete(e) {
+  const id = itemIdFrom(e.target);
+  try {
+    await apiFetch(`/api/items/${id}`, { method: "DELETE" });
+    await loadAll();
+  } catch (err) {
+    document.getElementById("errorArea").innerHTML = `<div class="error-banner">${err.message}</div>`;
+  }
+}
+async function onApproveSection(e) {
+  const section = e.target.dataset.section;
+  try {
+    await apiFetch(`/api/cv/${cvId}/items/bulk`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "approved", section, only_pending: true }),
+    });
+    await loadAll();
+  } catch (err) {
+    document.getElementById("errorArea").innerHTML = `<div class="error-banner">${err.message}</div>`;
+  }
+}
+
+async function onAdd(e) {
+  const block = e.target.closest(".section-block");
+  const input = block.querySelector(".add-input");
+  const line = input.value.trim();
+  if (!line) return;
+  try {
+    await apiFetch(`/api/cv/${cvId}/items`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ section: block.dataset.section, line }),
+    });
+    await loadAll();
+  } catch (err) {
+    document.getElementById("errorArea").innerHTML = `<div class="error-banner">${err.message}</div>`;
+  }
+}
+
+async function patchAndReload(itemId, patch) {
+  try {
+    await apiFetch(`/api/items/${itemId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    await loadAll();
+  } catch (err) {
+    document.getElementById("errorArea").innerHTML = `<div class="error-banner">${err.message}</div>`;
+  }
+}
+
+/* ---------- source document preview ---------- */
+
+async function loadSourcePreview(cv) {
+  const body = document.getElementById("sourcePaneBody");
+  const isPdf = (cv.original_filename || "").toLowerCase().endsWith(".pdf");
+
+  if (isPdf) {
+    // Browsers render PDF natively; nothing to convert.
+    body.innerHTML = `<iframe class="source-frame" src="/api/cv/${cvId}/source#view=FitH"
+                              title="Original CV"></iframe>`;
+    return;
+  }
+
+  // DOCX has no native browser renderer and converting server-side would
+  // need LibreOffice installed, so show the extracted text instead. It is
+  // the same text the classifier worked from, which is arguably the more
+  // useful thing to check an extracted item against.
+  try {
+    const data = await apiFetch(`/api/cv/${cvId}/source-text`);
+    const esc = (data.text || "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    body.innerHTML = `<p class="muted preview-note">Word document — showing extracted text
+                      (browsers cannot display .docx directly).</p>
+                      <pre class="source-text">${esc}</pre>`;
+  } catch (err) {
+    body.innerHTML = `<p class="muted">Preview unavailable: ${err.message}</p>`;
+  }
+}
+
+document.getElementById("togglePaneBtn").addEventListener("click", () => {
+  const ws = document.getElementById("workspace");
+  const collapsed = ws.classList.toggle("pane-collapsed");
+  document.getElementById("togglePaneBtn").textContent = collapsed ? "Show" : "Hide";
+  try { localStorage.setItem("mdx.sourcePane", collapsed ? "hidden" : "shown"); } catch (_) {}
+});
+
+(function restorePanePreference() {
+  try {
+    if (localStorage.getItem("mdx.sourcePane") === "hidden") {
+      document.getElementById("workspace").classList.add("pane-collapsed");
+      document.getElementById("togglePaneBtn").textContent = "Show";
+    }
+  } catch (_) {}
+})();
+
+/* ---------- keyboard-driven review ---------- */
+
+let focusedItemId = null;
+
+function reviewableRows() {
+  return Array.from(document.querySelectorAll(".item-row[data-item-id]"));
+}
+
+function pendingRows() {
+  return reviewableRows().filter(r => r.dataset.status === "pending_review");
+}
+
+function setFocus(row, { scroll = true } = {}) {
+  reviewableRows().forEach(r => r.classList.remove("focused"));
+  if (!row) { focusedItemId = null; return; }
+  row.classList.add("focused");
+  focusedItemId = row.dataset.itemId;
+  if (scroll) row.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+// After a reload the DOM is rebuilt, so re-attach the highlight to whatever
+// the reviewer was on -- or to the next item still needing attention, which
+// is what makes A-A-A-A feel continuous rather than losing your place.
+function restoreFocus() {
+  const rows = reviewableRows();
+  if (!rows.length) return;
+  const same = rows.find(r => r.dataset.itemId === focusedItemId);
+  if (same && same.dataset.status === "pending_review") { setFocus(same, { scroll: false }); return; }
+  const next = pendingRows()[0] || same || rows[0];
+  setFocus(next, { scroll: false });
+}
+
+function moveFocus(delta) {
+  const rows = reviewableRows();
+  if (!rows.length) return;
+  const idx = rows.findIndex(r => r.dataset.itemId === focusedItemId);
+  const nextIdx = Math.min(rows.length - 1, Math.max(0, (idx === -1 ? 0 : idx + delta)));
+  setFocus(rows[nextIdx]);
+}
+
+function focusedRow() {
+  return reviewableRows().find(r => r.dataset.itemId === focusedItemId) || null;
+}
+
+document.addEventListener("keydown", (e) => {
+  // Never hijack typing: the reviewer edits item text in a textarea, and a
+  // bare "a" or "r" there must stay a character, not fire an action.
+  const tag = (e.target.tagName || "").toLowerCase();
+  const typing = tag === "textarea" || tag === "input" || tag === "select";
+  if (e.key === "Escape" && typing) { e.target.blur(); return; }
+  if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+
+  const row = focusedRow();
+  switch (e.key.toLowerCase()) {
+    case "j": case "arrowdown": e.preventDefault(); moveFocus(1); break;
+    case "k": case "arrowup":   e.preventDefault(); moveFocus(-1); break;
+    case "a": if (row) { e.preventDefault(); row.querySelector(".act-approve")?.click(); } break;
+    case "r": if (row) { e.preventDefault(); row.querySelector(".act-reject")?.click(); } break;
+    case "e": if (row) { e.preventDefault(); row.querySelector(".line-input")?.focus(); } break;
+    case "?": document.getElementById("shortcutsBtn")?.click(); break;
+  }
+});
+
+document.getElementById("commandBar").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = document.getElementById("commandInput");
+  const out = document.getElementById("commandResult");
+  const text = input.value.trim();
+  if (!text) return;
+  try {
+    const res = await apiFetch(`/api/cv/${cvId}/command`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    out.style.display = "block";
+    out.className = "command-result ok";
+    out.textContent = res.message;
+    input.value = "";
+    await loadAll();
+  } catch (err) {
+    // Parser failures explain themselves and list valid commands, so show
+    // the message verbatim rather than a generic error.
+    out.style.display = "block";
+    out.className = "command-result bad";
+    out.textContent = err.message;
+  }
+});
+
+document.getElementById("shortcutsBtn").addEventListener("click", () => {
+  const help = document.getElementById("shortcutHelp");
+  help.style.display = help.style.display === "none" ? "flex" : "none";
+});
+
+document.getElementById("jumpNextBtn").addEventListener("click", () => {
+  const next = pendingRows()[0];
+  if (next) setFocus(next);
+});
+
+document.getElementById("bulkApproveBtn").addEventListener("click", async () => {
+  const count = pendingRows().length;
+  if (!confirm(`Approve all ${count} remaining item${count === 1 ? "" : "s"} without reviewing them individually?`)) return;
+  try {
+    await apiFetch(`/api/cv/${cvId}/items/bulk`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "approved", only_pending: true }),
+    });
+    await loadAll();
+  } catch (err) {
+    document.getElementById("errorArea").innerHTML = `<div class="error-banner">${err.message}</div>`;
+  }
+});
+
+document.getElementById("refreshBtn").addEventListener("click", loadAll);
+document.getElementById("generateBtn").addEventListener("click", async () => {
+  try {
+    await apiFetch(`/api/cv/${cvId}/generate`, { method: "POST" });
+    await loadAll();
+  } catch (err) {
+    document.getElementById("errorArea").innerHTML = `<div class="error-banner">${err.message}</div>`;
+  }
+});
+
+(async function init() {
+  if (!cvId) return;
+  await loadSectionDefs();
+  await loadAll();
+  setInterval(async () => {
+    const cv = await apiFetch(`/api/cv/${cvId}`);
+    if (["uploaded", "processing"].includes(cv.status)) await loadAll();
+  }, 4000);
+})();
+</script>
+</body>
+</html>

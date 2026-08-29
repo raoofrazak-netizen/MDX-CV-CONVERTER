@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MDX Faculty CV Converter</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="swatch"></span> MDX Faculty CV Converter</div>
+  <nav><a href="index.html">Upload &amp; History</a></nav>
+</header>
+
+<main>
+  <h1>Convert a faculty CV</h1>
+  <p class="lede">Upload a DOCX or PDF CV. It will be extracted, classified by section, and validated automatically — nothing is written to the final document until you've reviewed and approved it.</p>
+
+  <div class="card">
+    <div class="dropzone" id="dropzone">
+      <p><strong>Click to choose a file</strong> or drag one here</p>
+      <p class="muted">DOCX or PDF, up to 25 MB. Scanned/image-only PDFs aren't supported yet.</p>
+      <input type="file" id="fileInput" accept=".docx,.pdf">
+    </div>
+    <div id="uploadError"></div>
+    <div id="uploadStatus" class="muted" style="margin-top:0.8rem;"></div>
+  </div>
+
+  <div class="top-actions">
+    <h2 style="margin:0;">Upload history</h2>
+    <button class="btn-secondary" id="refreshBtn">Refresh</button>
+  </div>
+  <div class="card" style="padding:0;">
+    <table id="historyTable">
+      <thead>
+        <tr><th>File</th><th>Uploaded</th><th>Status</th><th></th></tr>
+      </thead>
+      <tbody id="historyBody"></tbody>
+    </table>
+    <div id="historyEmpty" class="empty-note" style="display:none;">No CVs uploaded yet.</div>
+  </div>
+</main>
+
+<script src="app.js"></script>
+<script>
+const dropzone = document.getElementById("dropzone");
+const fileInput = document.getElementById("fileInput");
+const uploadError = document.getElementById("uploadError");
+const uploadStatus = document.getElementById("uploadStatus");
+
+dropzone.addEventListener("click", () => fileInput.click());
+dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("dragover"); });
+dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+dropzone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dropzone.classList.remove("dragover");
+  if (e.dataTransfer.files.length) handleUpload(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener("change", () => {
+  if (fileInput.files.length) handleUpload(fileInput.files[0]);
+});
+
+async function handleUpload(file) {
+  uploadError.innerHTML = "";
+  uploadStatus.textContent = `Uploading ${file.name}...`;
+  const formData = new FormData();
+  formData.append("file", file);
+  try {
+    const result = await apiFetch("/api/upload", { method: "POST", body: formData });
+    uploadStatus.textContent = `Uploaded. Processing started for ${file.name}.`;
+    setTimeout(() => { window.location.href = `review.html?cv_id=${result.cv_id}`; }, 900);
+  } catch (err) {
+    uploadStatus.textContent = "";
+    uploadError.innerHTML = `<div class="error-banner">${err.message}</div>`;
+  }
+}
+
+async function loadHistory() {
+  const body = document.getElementById("historyBody");
+  const empty = document.getElementById("historyEmpty");
+  try {
+    const cvs = await apiFetch("/api/cvs");
+    if (!cvs.length) {
+      body.innerHTML = "";
+      empty.style.display = "block";
+      return;
+    }
+    empty.style.display = "none";
+    body.innerHTML = cvs.map(cv => `
+      <tr>
+        <td>${cv.original_filename}</td>
+        <td>${fmtDate(cv.uploaded_at)}</td>
+        <td>${pill(statusLabel(cv.status), cv.status)}</td>
+        <td><a class="btn btn-secondary btn-sm" href="review.html?cv_id=${cv.cv_id}">Open</a></td>
+      </tr>
+    `).join("");
+  } catch (err) {
+    body.innerHTML = `<tr><td colspan="4"><div class="error-banner">${err.message}</div></td></tr>`;
+  }
+}
+
+document.getElementById("refreshBtn").addEventListener("click", loadHistory);
+loadHistory();
+setInterval(loadHistory, 5000);
+</script>
+</body>
+</html>

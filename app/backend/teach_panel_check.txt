@@ -1,0 +1,47 @@
+n…"
+ button "Add" [ref_1175]
+ heading "Unmapped Information" [ref_1176]
+ generic "6 items" [ref_1177]
+ button "Approve 6 pending" [ref_1178]
+ generic "Content from the CV that fits no official MDX section. Approve what should be carried into the docum" [ref_1179]
+ generic "Recognise one of these source headings permanently — for every CV uploaded from now on, not just thi" [ref_1180]
+ generic "“OTHER INFORMATION”" [ref_1181]
+ generic "always file under" [ref_1182]
+ combobox "Full Name" [ref_1183]
+  option "Full Name" (selected) value="full_name"
+  option "Job Title" value="job_title"
+  option "Contact Information" value="contact_info"
+  option "Email" value="email"
+  option "Biography" value="biography"
+  option "Qualifications" value="qualifications"
+  option "Professional Association Memberships and Fellowships" value="associations"
+  option "Career Details – Present Employment" value="present_employment"
+  option "Career Details – Previous Employment" value="previous_employment"
+  option "Teaching and Learning" value="teaching_learning"
+  option "Internal/External Committees and Advisory Roles" value="committees"
+  option "Internal and External Academic Leadership" value="academic_leadership"
+  option "Knowledge Exchange and Professional Practice" value="knowledge_exchange"
+  option "Awards and Recognitions" value="awards"
+  option "Contribution to MDX Centres of Excellence/Research Lab" value="centres_of_excellence"
+  option "Research Grants, Funding and Consultancy Projects" value="grants"
+  option "Editorial Board Memberships, Review and Examiner Roles" value="editorial_roles"
+  option "Select Research Publications" value="publications"
+  option "Professional Profiles, Links and Identifiers" value="profiles_links"
+  option "Skills" value="skills"
+  option "Language Proficiency" value="language_proficiency"
+  generic "Full Name" [ref_1184]
+  generic "Job Title" [ref_1185]
+  generic "Contact Information" [ref_1186]
+  generic "Email" [ref_1187]
+  generic "Biography" [ref_1188]
+  generic "Qualifications" [ref_1189]
+  generic "Professional Association Memberships and Fellowships" [ref_1190]
+  generic "Career Details – Present Employment" [ref_1191]
+  generic "Career Details – Previous Employment" [ref_1192]
+  generic "Teaching and Learning" [ref_1193]
+  generic "Internal/External Committees and Advisory Roles" [ref_1194]
+  generic "Internal and External Academic Leadership" [ref_1195]
+  generic "Knowledge Exchange and Professional Practice" [ref_1196]
+  generic "Awards and Recognitions" [ref_1197]
+  generic "Contribution to MDX Centres of Excellence/Research Lab" [ref_1198]
+  generi
