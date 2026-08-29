@@ -224,6 +224,28 @@ td { padding: 0.6rem; border-bottom: 1px solid var(--border); vertical-align: mi
 .preview-note { margin: 0; padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--border); }
 .review-pane { min-width: 0; }
 
+/* Advisory banners: a hard-to-parse layout, or a detected-name mismatch --
+   informational, never blocking, so they're visually lighter than the
+   error-banner used for real failures. */
+.banner-warn { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn);
+               border-radius: var(--radius); padding: 0.8rem 1.1rem; margin-bottom: 1.2rem;
+               font-size: 0.88rem; }
+.banner-warn strong { color: var(--warn); }
+
+/* Activity log panel: collapsed by default, same collapse-and-remember
+   pattern as the source preview pane. */
+.audit-toggle { cursor: pointer; }
+.audit-row { display: flex; gap: 1rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border);
+             font-size: 0.85rem; }
+.audit-row:last-child { border-bottom: none; }
+.audit-row .audit-time { color: var(--text-soft); white-space: nowrap; }
+.audit-row .audit-detail { color: var(--text-soft); }
+
+/* Auto-approval setting card on index.html */
+.settings-card .settings-row { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; }
+.settings-card input[type=number] { width: 6rem; padding: 0.4rem 0.6rem; border: 1px solid var(--border);
+                                     border-radius: 6px; font: inherit; }
+
 /* Below tablet width a side-by-side split stops helping, so stack instead. */
 @media (max-width: 1000px) {
   .workspace, .workspace.pane-collapsed { grid-template-columns: 1fr; }

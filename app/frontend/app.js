@@ -29,3 +29,7 @@ function pill(text, cls) {
 function statusLabel(status) {
   return status.replaceAll("_", " ");
 }
+
+function actionLabel(action) {
+  return action.replaceAll("_", " ").replace(/^./, c => c.toUpperCase());
+}
