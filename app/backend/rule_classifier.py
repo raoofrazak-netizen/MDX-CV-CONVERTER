@@ -67,8 +67,14 @@ def find_phone(text: str) -> re.Match | None:
 MONTH_WORD = (
     r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?"
 )
-# One end of a date range: a year, optionally preceded by a month name.
-_DATE_PART = rf"(?:{MONTH_WORD}\s+)?\d{{4}}"
+# One end of a date range: a year, optionally preceded by a month name or a
+# numeric month ("08/2020"). Without the numeric-month alternative, "08/" in
+# "08/2020 - 12/2022" isn't part of the match at all -- it's just skipped --
+# and the "12" of "12/2022" is then free to be misread by the caller as a
+# 2-digit ABBREVIATED end year (the "2024-26" case), turning a real
+# "12/2022" into a fabricated "2112" and leaving "/2022" behind as a bogus
+# job title.
+_DATE_PART = rf"(?:{MONTH_WORD}\s+|\d{{1,2}}/)?\d{{4}}"
 YEAR_RANGE_RE = re.compile(
     # Both ends must allow a leading month. CVs very often write
     # "June 2024 - July 2025", and a year-only pattern consumes just
@@ -175,7 +181,7 @@ SYNONYM_HEADINGS: dict[str, list[str]] = {
     "skills": [
         "SKILLS", "KEY SKILLS", "CORE SKILLS", "TECHNICAL SKILLS", "IT SKILLS",
         "SOFT SKILLS", "PERSONAL SKILLS", "OTHER SKILLS", "TECHNICAL PROFICIENCY",
-        "DIGITAL AND TECHNICAL SKILLS", "DIGITAL SKILLS",
+        "DIGITAL AND TECHNICAL SKILLS", "DIGITAL SKILLS", "AREAS OF EXPERTISE",
     ],
     "language_proficiency": [
         "LANGUAGES", "LANGUAGES KNOWN", "LANGUAGE PROFICIENCY", "LANGUAGE SKILLS",
@@ -183,7 +189,7 @@ SYNONYM_HEADINGS: dict[str, list[str]] = {
     # generic catch-all heading that needs per-item present/previous splitting
     "_generic_employment": [
         "EMPLOYMENT HISTORY", "WORK EXPERIENCE", "CAREER HISTORY", "PROFESSIONAL EXPERIENCE",
-        "ADDITIONAL WORK EXPERIENCE", "EMPLOYMENT", "PROFESSIONAL BACKGROUND",
+        "ADDITIONAL WORK EXPERIENCE", "EMPLOYMENT", "PROFESSIONAL BACKGROUND", "EXPERIENCE",
     ],
     # recognised as a real section boundary, but has no home anywhere in the
     # 20 fixed MDX sections -- discarded rather than fabricated a place for
@@ -763,6 +769,24 @@ DATE_ANCHOR_RE = re.compile(
 )
 
 
+# A bare "TITLE, MM/YYYY - MM/YYYY" job-title line with its own date range
+# folded in (as opposed to the title-alone-then-employer-with-date layout
+# _employment_body_entries already handles) and no bullet glyph in front of
+# it. Nothing else in _forces_new_item catches this shape -- it isn't a
+# name/email/phone, doesn't open with the date, isn't a bare short-caps
+# label (the date's digits rule that check out) -- so without this it reads
+# as more of the previous job's last responsibility bullet and welds a new
+# job's title onto the tail of an unrelated sentence.
+def _is_title_with_date_line(text: str) -> bool:
+    match = YEAR_RANGE_RE.search(text)
+    if not match:
+        return False
+    head = text[: match.start()].strip(" ,-–—")
+    if not head or not _looks_like_job_title(head):
+        return False
+    return any(kw in head.lower() for kw in TITLE_KEYWORDS)
+
+
 def _forces_new_item(line: str) -> bool:
     """Hard boundary signals that are trustworthy even with zero bullet
     markers to go on: a line that IS a person's name, contains an email,
@@ -785,6 +809,7 @@ def _forces_new_item(line: str) -> bool:
         or DATE_ANCHOR_RE.match(stripped)
         or _opens_with_degree(stripped)
         or _is_short_caps_label(stripped)
+        or _is_title_with_date_line(stripped)
     )
 
 
@@ -1182,6 +1207,46 @@ def _repeats_as_content(text: str) -> bool:
     return "," in text
 
 
+# A PDF two-column or side-by-side layout can place a section heading and
+# the first piece of its own body content on what extraction sees as ONE
+# line -- "EXPERIENCE  MARKETING MANAGER, 01/2023 - 11/2025" or
+# "AREAS OF EXPERTISE  • Performance marketing" (no line break exists in
+# the extracted text where a person reading the page would see one). Left
+# alone, the merged line fails every heading check (it is far longer than
+# the heading phrase alone) and silently welds an entire section's worth of
+# content onto whatever section was already open -- one real CV lost its
+# whole Skills list and Experience section into Biography this way.
+# Splitting at the same seam a real line break would have left -- a run of
+# 2+ spaces, or a bullet glyph -- and heading-testing only the left-hand
+# side recovers both the heading and the content that follows it.
+# Bullet glyphs only (not BULLET_CHARS' dashes -- a hyphen inside an
+# ordinary heading-shaped line, e.g. "CO-ORDINATOR", is not a seam).
+_GLUED_HEADING_SEAM_RE = re.compile(r"\s{2,}|[•●▪‣⁃�·]\s*")
+
+
+def _split_glued_heading(line: str) -> tuple[str, str, str] | None:
+    """(heading_text, section_key, remainder) if `line` is a heading glued to
+    its own first line of content with no break between them; else None.
+
+    Only the first seam is tried, and only the left-hand side is required to
+    resolve to a known heading -- an ordinary sentence that happens to
+    contain a wide gap or a bullet character deep inside its wording is
+    never mistaken for one, because `_find_heading_key` is exactly as strict
+    on this shorter left-hand text as it already is everywhere else.
+    """
+    match = _GLUED_HEADING_SEAM_RE.search(line)
+    if not match:
+        return None
+    head = line[: match.start()].strip()
+    rest = line[match.end() :].strip()
+    if not head or not rest:
+        return None
+    key = _find_heading_key(head)
+    if not key:
+        return None
+    return head, key, rest
+
+
 def _split_into_sections(
     lines: list[str],
 ) -> tuple[list[str], dict[str, list[str]], set[str]]:
@@ -1212,10 +1277,30 @@ def _split_into_sections(
         # sentence ending in "...education." was read as a new EDUCATION
         # heading partway through its Research Projects section.
         stripped_line = line.strip()
-        if stripped_line.endswith((".", "!", "?")):
-            heading_key = None
-        else:
-            heading_key = _find_heading_key(line)
+        glued_rest: str | None = None
+        heading_source = line
+        heading_key = None
+        if not stripped_line.endswith((".", "!", "?")):
+            # Tried before matching the line whole: `_find_heading_key`'s own
+            # loose "contains a known phrase anywhere" fallback (for a
+            # legitimate compound heading like "SUMMARY OF SKILLS AND
+            # QUALIFICATIONS") is just as happy to match that same phrase
+            # inside a heading GLUED to its own first line of content --
+            # "EXPERIENCE  MARKETING MANAGER, 01/2023 - 11/2025" resolves via
+            # that fallback too, and matching it whole would swallow the
+            # entire line as "just a heading", silently discarding the job
+            # title and dates that follow it. Skipped for a line that is
+            # already a complete, official heading verbatim -- nothing to
+            # recover there, and a legitimately double-spaced official
+            # heading should never be carved up.
+            if not is_authoritative_heading(line):
+                glued = _split_glued_heading(line)
+                if glued:
+                    heading_source, heading_key, glued_rest = glued
+            if not heading_key:
+                heading_key = _find_heading_key(line)
+                heading_source = line
+                glued_rest = None
         if heading_key:
             if (
                 heading_key == current_key
@@ -1245,8 +1330,13 @@ def _split_into_sections(
                 # two pages later.
                 sections[current_key].append(SEGMENT_BREAK)
             sections.setdefault(current_key, [])
-            if is_authoritative_heading(line):
+            if is_authoritative_heading(heading_source):
                 authoritative.add(current_key)
+            if glued_rest:
+                # The heading was glued to its own first line of content
+                # (see _split_glued_heading) -- that content still belongs
+                # to the section it introduces, not nowhere.
+                sections[current_key].append(glued_rest)
             continue
         if current_key is None:
             preamble.append(line)

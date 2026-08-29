@@ -86,6 +86,11 @@ WELDED_WORDS_RE = re.compile(r"[A-Z]{4,}[A-Z][a-z]{3,}")
 PLACEHOLDER_MARKERS = (
     "your@email", "xxx-xxx", "(xxx)", "your address", "city, state, zip",
     "lorem ipsum", "firstname lastname", "[insert",
+    # A vendor sample resume addressed to a hypothetical candidate, not a
+    # real person's CV -- same class of no-real-name file as the other
+    # markers above, just signed off differently (rule_classifier.py's
+    # VENDOR_BOILERPLATE_RE recognises the same text for the same reason).
+    "dear job seeker", "per resume", "youremail@",
 )
 
 
@@ -160,7 +165,7 @@ def check(path: Path) -> list[str]:
     if not name_items:
         if not placeholder:
             failures.append("no full name found")
-    else:
+    elif not placeholder:
         name = (name_items[0]["fields"].get("value") or "").strip()
         if not name:
             failures.append("full name item has an empty value")
