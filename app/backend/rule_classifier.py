@@ -115,8 +115,12 @@ SYNONYM_HEADINGS: dict[str, list[str]] = {
     "qualifications": [
         "EDUCATION", "CERTIFICATIONS", "CERTIFICATIONS AND TRAININGS",
         "EDUCATION AND QUALIFICATIONS", "ACADEMIC QUALIFICATIONS",
+        "CERTIFICATES", "CERTIFICATE",
     ],
-    "associations": ["PROFESSIONAL MEMBERSHIPS", "MEMBERSHIPS AND FELLOWSHIPS", "ASSOCIATIONS"],
+    "associations": [
+        "PROFESSIONAL MEMBERSHIPS", "MEMBERSHIPS AND FELLOWSHIPS", "ASSOCIATIONS",
+        "PUBLIC SERVICE", "COMMUNITY SERVICE", "VOLUNTEER WORK", "VOLUNTEERING",
+    ],
     "present_employment": ["PRESENT EMPLOYMENT", "CURRENT EMPLOYMENT", "CURRENT POSITION"],
     "previous_employment": ["PREVIOUS EMPLOYMENT", "PREVIOUS EXPERIENCE"],
     "teaching_learning": [
@@ -1759,8 +1763,33 @@ def _extract_employment_fields(line: str, employer_key: str) -> dict[str, Any]:
         parts[-2:] = [f"{parts[-2]}, {parts[-1]}"]
     if not parts:
         return {"start_date": start, "end_date": end}
-    employer = parts[-1] if len(parts) > 1 else ""
-    title = ", ".join(parts[:-1]) if len(parts) > 1 else parts[0]
+    # The usual convention is "Title, Employer" (title first) -- but plenty
+    # of CVs instead write "Employer, City Country" on one line and "Title
+    # <tabs> Date" on the next ("Middlesex University, Dubai UAE" / "Senior
+    # Lecturer   September 2023 - Present"), which grouping glues into one
+    # comma-poor blob with the title stuck on the END, not the start. Taking
+    # the last comma part as "employer" unconditionally then stores the
+    # employer's own name as the job title. A title keyword found in the
+    # LAST part but not the first is the signal this is the reversed
+    # convention; only the immediately preceding word is folded in too
+    # (covers "Senior Lecturer", "Assistant Director" -- the common
+    # one-modifier case), not an open-ended backward search.
+    last_has_title_kw = len(parts) > 1 and any(kw in parts[-1].lower() for kw in TITLE_KEYWORDS)
+    first_has_title_kw = len(parts) > 1 and any(kw in parts[0].lower() for kw in TITLE_KEYWORDS)
+    if last_has_title_kw and not first_has_title_kw:
+        tail_words = parts[-1].split()
+        kw_idx = next(
+            (i for i, w in enumerate(tail_words)
+             if any(kw in w.lower() for kw in TITLE_KEYWORDS)),
+            None,
+        )
+        title_start = max(0, kw_idx - 1) if kw_idx and re.match(r"^[A-Z][a-z]+$", tail_words[kw_idx - 1]) else kw_idx
+        location_prefix = " ".join(tail_words[:title_start])
+        title = " ".join(tail_words[title_start:])
+        employer = ", ".join(parts[:-1]) + (f", {location_prefix}" if location_prefix else "")
+    else:
+        employer = parts[-1] if len(parts) > 1 else ""
+        title = ", ".join(parts[:-1]) if len(parts) > 1 else parts[0]
     # Grouping sometimes fuses a title-only line straight onto the
     # following "Employer, City, ST (dates)" line with no punctuation
     # between them at all ("Senior Marketing Executive Falcon Media House,
@@ -1840,7 +1869,8 @@ def normalize_date_range(text: str) -> str:
 # Degree names, longest first so "Master of Science" wins over "Master" and
 # the abbreviation forms are not swallowed by a shorter prefix.
 DEGREE_PATTERNS = [
-    r"Doctor of Philosophy", r"Ph\.?\s?D\.?", r"D\.?Phil\.?", r"Ed\.?D\.?",
+    r"Doctor of Philosophy", r"Doctor of Education", r"Doctor of Business Administration",
+    r"Doctor of Psychology", r"Ph\.?\s?D\.?", r"D\.?Phil\.?", r"Ed\.?D\.?",
     r"Doctorate", r"Master of Business Administration", r"M\.?B\.?A\.?",
     r"Master of Philosophy", r"M\.?Phil\.?", r"Master of Science",
     r"Master of Arts", r"Master of Education", r"Master of Engineering",
@@ -2324,7 +2354,23 @@ def _promote_present_role(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     plainly states the person's current job, and the letterhead's Job title
     falls back to whatever fragment happened to sit near the email.
     """
-    if any(it["section"] == "present_employment" for it in items):
+    # A present_employment item can already exist without ever going
+    # through the "promotion" path below -- e.g. _generic_employment's own
+    # "is_current and the employer name matches" check routes it there
+    # directly. That item's own parsed title is still more trustworthy than
+    # whatever the letterhead scan guessed from nearby text (a nearby
+    # fellowship or scholarship line matching a title keyword by
+    # coincidence, say), so the same override applies even when nothing
+    # here needs to be "promoted" -- only the job_title guess is fixed.
+    existing_present = next((it for it in items if it["section"] == "present_employment"), None)
+    if existing_present:
+        title = (existing_present.get("fields") or {}).get("title", "").strip()
+        if title:
+            items = [i for i in items if i["section"] != "job_title"]
+            items.append({
+                "section": "job_title", "fields": {"value": title},
+                "source_text": existing_present["source_text"], "confidence": 0.7,
+            })
         return items
 
     # An entry already filed under Previous Employment (because its section

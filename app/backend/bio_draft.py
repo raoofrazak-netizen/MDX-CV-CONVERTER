@@ -78,6 +78,27 @@ def _best_qualification(items: list[dict[str, Any]], full_name: str) -> str:
     qualifies.
     """
     name_key = " ".join(full_name.split()).casefold()
+    # A degree entry can end up split across two items when a résumé lists
+    # the institution/date on its own line ahead of the degree name (an
+    # unusual but real ordering) -- the institution-only item still
+    # contains a QUALIFICATION_MARKERS word ("University") and would
+    # otherwise win by appearing first, producing "holds University Johns
+    # Hopkins School of Education - Baltimore, MD, USA May 2023" instead of
+    # the actual degree. An item with a real, structured `degree` field is
+    # unambiguous evidence over a raw-text keyword match, so it's checked
+    # first regardless of item order; only when none exists does the older
+    # whole-text marker scan run, so a CV with no structured fields at all
+    # (a rule-based parse that never even attempted one) still gets a bio.
+    for item in items:
+        if item["section"] != "qualifications":
+            continue
+        fields = item.get("fields", {}) or {}
+        degree = (fields.get("degree") or "").strip()
+        if not degree:
+            continue
+        subject = (fields.get("subject") or "").strip()
+        return f"{degree} in {subject}" if subject else degree
+
     for item in items:
         if item["section"] != "qualifications":
             continue
