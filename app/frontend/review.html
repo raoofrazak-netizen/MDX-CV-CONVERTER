@@ -76,6 +76,7 @@
         <h2>Quality report</h2>
         <p class="muted" id="qrSummary"></p>
         <div class="qr-grid" id="qrGrid"></div>
+        <div id="shortFieldFlags"></div>
         <div id="downloadArea"></div>
       </div>
 
@@ -271,6 +272,14 @@ function renderQuality(report, cvStatus) {
       const icon = s.status === "verified" ? "✓" : (s.status === "needs_review" ? "⚠" : "✕");
       return `<div class="qr-item"><span>${icon} ${s.label}</span>${pill(s.status.replace("_"," "), s.status)}</div>`;
     }).join("");
+
+  // Purely informational -- an approved item with a suspiciously short
+  // field (a job title of "X", say) almost always means a line got split
+  // in the wrong place. Never blocks generation; just worth a glance.
+  const shortFields = report.short_field_flags || [];
+  document.getElementById("shortFieldFlags").innerHTML = shortFields.length
+    ? `<div class="banner-warn" style="margin-top:0.8rem;"><strong>Worth a second look</strong> — these approved fields are unusually short, which can mean a line was split in the wrong place: ${shortFields.map(f => `<code>${f}</code>`).join(", ")}</div>`
+    : "";
 
   const genBtn = document.getElementById("generateBtn");
   genBtn.disabled = !report.ready_to_download;

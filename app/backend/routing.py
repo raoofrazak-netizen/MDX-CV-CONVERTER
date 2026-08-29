@@ -204,3 +204,43 @@ def apply_routing(
             set(item.get("validation_flags", [])) | {"rerouted_by_content"}
         )
     return items
+
+
+# Excluded from the cross-check below, not because their wording can't
+# disagree with their heading, but because a disagreement there is expected
+# noise rather than a signal: "value" holds a bare phone/email/URL with no
+# prose ROUTING_RULES could meaningfully read, and a résumé's letterhead
+# job title routinely contains a role word ("Senior Lecturer") that would
+# otherwise flag itself against its own section every time.
+CROSS_CHECK_EXCLUDED_SECTIONS = {
+    "full_name", "job_title", "contact_info", "email", "profile_photo",
+    "unmapped", "biography", "skills", "language_proficiency",
+}
+
+
+def flag_disagreements(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A second, independent opinion on where each item belongs -- run
+    AFTER classification, routing, and auto-approval are all finished, so
+    it can only ever ADD a flag for a person to weigh. It never moves an
+    item, never changes its fields, and never touches its approval status.
+
+    This deliberately checks item that apply_routing() itself would never
+    touch -- content under a heading the CV stated explicitly, or in a
+    PROTECTED_TARGETS section -- because those are exactly the cases where
+    a silent misclassification could otherwise reach the final document
+    unnoticed. apply_routing() leaving them alone is the right call for
+    automatically MOVING content (a heading the CV wrote explicitly should
+    win over a guess from wording); it is not a reason to hide a disagreement
+    from the reviewer entirely.
+    """
+    for item in items:
+        section = item.get("section")
+        if section in CROSS_CHECK_EXCLUDED_SECTIONS:
+            continue
+        target = route_item(item.get("source_text", ""))
+        if not target or target == section:
+            continue
+        item["validation_flags"] = sorted(
+            set(item.get("validation_flags", [])) | {f"possible_fit_for_{target}"}
+        )
+    return items

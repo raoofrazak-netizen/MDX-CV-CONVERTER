@@ -9,6 +9,7 @@ from pathlib import Path
 
 import bio_draft
 import profiles
+import routing
 import storage
 import unmapped
 from classifier import AI_FALLBACK_FLAG, ClassificationError, classify
@@ -50,6 +51,12 @@ def process_cv(cv_id: str, stored_path: Path, original_filename: str) -> None:
         items = _to_storage_items(cv_id, raw_items)
         items = validate_items(items)
         items = apply_auto_approval(items)
+        # Runs only after approval status is already decided, so this can
+        # only ever add a "worth a second look" flag -- never move an item,
+        # never change what got auto-approved. See flag_disagreements()'s
+        # own docstring for why it checks items apply_routing() (called
+        # earlier, inside classify_rule_based) deliberately leaves alone.
+        items = routing.flag_disagreements(items)
 
         bio_item = bio_draft.build_biography_item(cv_id, items)
         if bio_item:

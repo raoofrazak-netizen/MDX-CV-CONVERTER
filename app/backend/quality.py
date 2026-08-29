@@ -2,6 +2,44 @@ from typing import Any
 
 from config import SECTIONS, TEMPLATE_SECTION_KEYS
 
+# Structured fields that should never realistically be this short -- a
+# genuine job title, employer, or institution is always more than a couple
+# of characters. A value this short is almost always a parsing artifact (a
+# stray fragment left behind when a line got split in the wrong place), not
+# real content. Deliberately excludes date-like fields ("2020",
+# "start_date") and free-text "value" fields (an email or phone number can
+# legitimately be short), which are not evidence of anything wrong.
+# "degree" is excluded too, for a different reason: it is only ever set
+# from a DEGREE_RE match against a known list of real degree names/
+# abbreviations, several of which ARE this short on purpose ("BA", "MA",
+# "MS") -- already-vetted content, not a candidate for this check.
+SHORT_FIELD_KEYS = {
+    "title", "employer", "unit", "institution", "subject",
+    "project_title", "role", "funding_agency",
+}
+SHORT_FIELD_MAX_CHARS = 2
+
+
+def _find_short_field_flags(items: list[dict[str, Any]]) -> list[str]:
+    """Items whose value the reviewer has accepted (approved or edited)
+    that still carry a suspiciously short structured field.
+
+    Purely observational: this never changes an item's section, fields, or
+    status, and never blocks generation -- it only surfaces something worth
+    a second look, the same way `duplicate_flags` and `discarded_flags`
+    already do below.
+    """
+    flags = []
+    for item in items:
+        if item["status"] not in ("approved", "edited"):
+            continue
+        fields = item.get("fields") or {}
+        for key in SHORT_FIELD_KEYS:
+            value = fields.get(key)
+            if isinstance(value, str) and 0 < len(value.strip()) <= SHORT_FIELD_MAX_CHARS:
+                flags.append(f"{item['section']}.{key}: {value.strip()!r}")
+    return flags
+
 
 def build_quality_report(
     cv_id: str, items: list[dict[str, Any]], has_photo: bool = False
@@ -59,6 +97,8 @@ def build_quality_report(
         for i in items if "possible_duplicate_publication" in i["validation_flags"]
     ]
 
+    short_field_flags = _find_short_field_flags(items)
+
     unresolved_low_confidence = any(
         i["status"] == "pending_review" and i["confidence_band"] == "low" for i in items
     )
@@ -101,6 +141,7 @@ def build_quality_report(
         "overall_confidence": round(overall_confidence, 3),
         "sections": sections_report,
         "duplicate_flags": duplicate_flags,
+        "short_field_flags": short_field_flags,
         "formatting_status": "ok",
         "total_items": len(items),
         "pending_count": pending_count,
