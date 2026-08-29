@@ -20,7 +20,7 @@
     <div class="dropzone" id="dropzone">
       <p><strong>Click to choose a file</strong> or drag one here</p>
       <p class="muted">DOCX or PDF, up to 25 MB. Scanned/image-only PDFs aren't supported yet.</p>
-      <input type="file" id="fileInput" accept=".docx,.pdf">
+      <input type="file" id="fileInput" accept=".docx,.pdf" multiple>
     </div>
     <div id="uploadError"></div>
     <div id="uploadStatus" class="muted" style="margin-top:0.8rem;"></div>
@@ -54,10 +54,10 @@ dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover
 dropzone.addEventListener("drop", (e) => {
   e.preventDefault();
   dropzone.classList.remove("dragover");
-  if (e.dataTransfer.files.length) handleUpload(e.dataTransfer.files[0]);
+  if (e.dataTransfer.files.length) handleUploadBatch(e.dataTransfer.files);
 });
 fileInput.addEventListener("change", () => {
-  if (fileInput.files.length) handleUpload(fileInput.files[0]);
+  if (fileInput.files.length) handleUploadBatch(fileInput.files);
 });
 
 async function handleUpload(file) {
@@ -73,6 +73,58 @@ async function handleUpload(file) {
     uploadStatus.textContent = "";
     uploadError.innerHTML = `<div class="error-banner">${err.message}</div>`;
   }
+}
+
+// Uploads with a small concurrency cap rather than firing every request at
+// once -- pipeline.py keeps CV processing synchronous for Phase 1, so a
+// dozen simultaneous background tasks would compete for resources it
+// wasn't sized for.
+const BATCH_CONCURRENCY = 3;
+
+async function uploadOne(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  await apiFetch("/api/upload", { method: "POST", body: formData });
+}
+
+async function handleUploadBatch(fileList) {
+  const files = Array.from(fileList);
+  // The single-file case keeps the exact behaviour reviewers already know
+  // -- upload, then redirect straight into the review screen.
+  if (files.length === 1) { await handleUpload(files[0]); return; }
+
+  uploadError.innerHTML = "";
+  uploadStatus.textContent = `Uploading 0 of ${files.length} files...`;
+
+  let done = 0;
+  let ok = 0;
+  const failures = [];
+  let next = 0;
+
+  async function worker() {
+    while (next < files.length) {
+      const file = files[next++];
+      try {
+        await uploadOne(file);
+        ok++;
+      } catch (err) {
+        failures.push(`${file.name}: ${err.message}`);
+      }
+      done++;
+      uploadStatus.textContent = `Uploading ${done} of ${files.length} files...`;
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(BATCH_CONCURRENCY, files.length) }, worker));
+
+  uploadStatus.textContent = failures.length
+    ? `Uploaded ${ok} of ${files.length} files — ${failures.length} failed, see below.`
+    : `Uploaded ${ok} of ${files.length} files.`;
+  uploadError.innerHTML = failures.length
+    ? `<div class="error-banner">${failures.map(f => `<div>${f}</div>`).join("")}</div>`
+    : "";
+  // No redirect on the multi-file path -- each upload gets its own row in
+  // the history table below, which already polls every 5 seconds.
+  loadHistory();
 }
 
 async function loadHistory() {
