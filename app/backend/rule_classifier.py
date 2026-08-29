@@ -1199,7 +1199,23 @@ def _split_into_sections(
             continue
         if line.strip().upper() == "CURRICULUM VITAE":
             continue
-        heading_key = _find_heading_key(line)
+        # A wrapped sentence that happens to END in a word spelling out an
+        # official heading exactly ("...prepared for open-source robotics
+        # education.") normalizes, once its trailing period is stripped, to
+        # the literal heading text -- and matches it exactly. A genuine
+        # heading essentially never ends in sentence-final punctuation, so
+        # this alone (not the fuller "looks like a heading" shape test,
+        # which would also reject a legitimate Title-Case heading with no
+        # colon) is enough to tell the two apart without new false
+        # rejections. Unguarded, this silently truncated whatever section
+        # was open -- one CV lost every project after the first because a
+        # sentence ending in "...education." was read as a new EDUCATION
+        # heading partway through its Research Projects section.
+        stripped_line = line.strip()
+        if stripped_line.endswith((".", "!", "?")):
+            heading_key = None
+        else:
+            heading_key = _find_heading_key(line)
         if heading_key:
             if (
                 heading_key == current_key
@@ -2257,6 +2273,30 @@ def _structure_grants(body_items: list[str]) -> list[dict[str, Any]]:
             current["fields"]["funding_agency"] = funded.group(1).strip(" .,")
             if funded.group(2):
                 current["fields"]["duration"] = normalize_date_range(funded.group(2).strip(" .,"))
+            continue
+
+        # A CV listing personal/academic projects rather than externally
+        # funded ones commonly gives each its own header with no "Role:" /
+        # "Project Title:" label and no "(Funded by ...)" line at all --
+        # just the project name (and often a context clause) ending in its
+        # own date range, the same shape used elsewhere in this module to
+        # recognise a job or qualification entry's own header line. Without
+        # this, only the FIRST such project (matched by pure luck if its
+        # name happened to contain a colon) was ever captured -- every
+        # later one was silently discarded, not even reaching the Unmapped
+        # safety net as its own reviewable line, because nothing here ever
+        # created an item for it.
+        if ENTRY_END_YEAR_RE.search(text):
+            # Guard against a line that is nothing BUT date debris (a PDF's
+            # own line-wrap can split a project's own header mid-phrase,
+            # leaving a orphaned "2023 - Apr 2025" fragment behind) --
+            # require real content to remain once the trailing date and any
+            # dangling month name are stripped, the same "is this actually
+            # a title or just date remnant" check used for employment dates.
+            head = TRAILING_MONTH_RE.sub("", ENTRY_END_YEAR_RE.sub("", text)).strip(" ,-–—")
+            if len(head) >= 10:
+                current = {"fields": {"project_title": text}, "source_text": text}
+                grants.append(current)
     return grants
 
 
