@@ -94,6 +94,18 @@ def find_unmapped(
     context that HR can see where it came from" §8 asks for. A line before any
     heading is reported under the source's own top-of-document area.
     """
+    # A CV's own name commonly repeats mid-document -- a running header, a
+    # signature line, a name printed again above a later job entry in a
+    # scrambled multi-column layout. Short and (usually) all-caps, it passes
+    # the same shape test a real heading does, and without this it becomes a
+    # fake "context" label: everything genuinely unmapped that follows gets
+    # attributed to a heading called "ALAN SHAJI", which is not what it is.
+    # Mirrors `_drop_name_echoes()`'s treatment of the same pattern for
+    # already-classified items.
+    name_item = next((i for i in items if i.get("section") == "full_name"), None)
+    name_value = ((name_item or {}).get("fields") or {}).get("value") or ""
+    normalized_name = " ".join(name_value.split()).casefold()
+
     covered: list[str] = []
     values: list[str] = []
     for item in items:
@@ -123,6 +135,12 @@ def find_unmapped(
     for raw_line in cv_text.splitlines():
         line = raw_line.strip()
         if not line:
+            continue
+
+        if normalized_name and " ".join(line.split()).casefold() == normalized_name:
+            # A bare repeat of the person's own name -- not a heading (so it
+            # must not become the context label) and not content HR needs to
+            # see reported as an orphaned line either.
             continue
 
         heading_key = _find_heading_key(line)

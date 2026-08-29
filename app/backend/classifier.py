@@ -102,6 +102,14 @@ return prose outside the tool call.
 """
 
 
+# Set on every item classify() returns via the rule-engine fallback (an AI
+# key IS configured but the call itself failed or came back unusable), so
+# a caller can tell the two success paths apart without classify() having
+# to change its return type. Never set on the "no key configured at all"
+# path above -- that one is the deliberate, expected default, not a failure.
+AI_FALLBACK_FLAG = "ai_unavailable_used_rule_fallback"
+
+
 def classify(cv_text: str, source_document: str) -> list[dict[str, Any]]:
     if not ANTHROPIC_API_KEY:
         return _validate_against_source(classify_rule_based(cv_text, source_document), cv_text)
@@ -122,17 +130,41 @@ def classify(cv_text: str, source_document: str) -> list[dict[str, Any]]:
                 }
             ],
         )
-    except anthropic.APIError as exc:
-        raise ClassificationError(
-            "The AI extraction service is temporarily unavailable. Please try again shortly."
-        ) from exc
+    except anthropic.APIError:
+        # A configured key that can't be used right now -- no credit, an
+        # outage, a rate limit -- used to fail the whole CV with nothing to
+        # show for it. The rule engine processed every CV before the AI path
+        # existed and is still sitting right here; falling back to it keeps
+        # HR moving (a coarser first pass, same as always) instead of a dead
+        # end over an outage that has a working offline alternative. Every
+        # item is flagged so it can never quietly look like a full AI pass
+        # -- see AI_FALLBACK_FLAG, and needs_human_review()'s flag-based
+        # check means a fallback item can never auto-approve either.
+        return _mark_ai_fallback(_validate_against_source(
+            classify_rule_based(cv_text, source_document), cv_text
+        ))
 
     for block in response.content:
         if block.type == "tool_use" and block.name == "emit_cv_items":
             raw_items = block.input.get("items", [])
             return _validate_against_source(raw_items, cv_text)
 
-    raise ClassificationError("AI extraction did not return a structured result. Please try again.")
+    # The call itself succeeded but didn't return the structured result it
+    # was told to -- treated the same as an outright failure above, for the
+    # same reason: a working offline path exists, so this doesn't need to
+    # fail the CV either.
+    return _mark_ai_fallback(_validate_against_source(
+        classify_rule_based(cv_text, source_document), cv_text
+    ))
+
+
+def _mark_ai_fallback(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for item in items:
+        flags = list(item.get("validation_flags", []))
+        if AI_FALLBACK_FLAG not in flags:
+            flags.append(AI_FALLBACK_FLAG)
+        item["validation_flags"] = flags
+    return items
 
 
 def _validate_against_source(raw_items: list[dict[str, Any]], cv_text: str) -> list[dict[str, Any]]:

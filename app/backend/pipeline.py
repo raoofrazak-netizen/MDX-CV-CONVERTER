@@ -11,7 +11,7 @@ import bio_draft
 import profiles
 import storage
 import unmapped
-from classifier import ClassificationError, classify
+from classifier import AI_FALLBACK_FLAG, ClassificationError, classify
 from config import PHOTOS_DIR
 from extraction import ExtractionError, blocks_to_plain_text, extract
 from photo import extract_photo
@@ -31,7 +31,21 @@ def process_cv(cv_id: str, stored_path: Path, original_filename: str) -> None:
         _extract_and_store_photo(cv_id, stored_path)
 
         raw_items = classify(cv_text, original_filename)
-        storage.log_event(cv_id, "ai_classification_complete", detail=f"{len(raw_items)} items")
+        used_fallback = any(
+            AI_FALLBACK_FLAG in (item.get("validation_flags") or []) for item in raw_items
+        )
+        if used_fallback:
+            # The AI key is configured but the call itself couldn't be used
+            # (no credit, an outage, a rate limit) -- distinct from both a
+            # real AI pass and the no-key-configured default, so HR can see
+            # in the audit log that this specific CV got the coarser,
+            # offline-quality pass and may be worth a closer review.
+            storage.log_event(
+                cv_id, "ai_unavailable_used_rule_fallback",
+                detail=f"{len(raw_items)} items via rule engine (AI call failed or was unusable)",
+            )
+        else:
+            storage.log_event(cv_id, "ai_classification_complete", detail=f"{len(raw_items)} items")
 
         items = _to_storage_items(cv_id, raw_items)
         items = validate_items(items)

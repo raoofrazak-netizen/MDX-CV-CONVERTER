@@ -197,7 +197,7 @@ SYNONYM_HEADINGS: dict[str, list[str]] = {
     # as "qualifications" all the way to the end of the document).
     "_ignored": [
         "DECLARATION", "INTERESTS", "HOBBIES", "REFERENCES", "PERSONAL DETAILS",
-        "PERSONAL PARTICULARS", "PERSONAL INFORMATION",
+        "PERSONAL PARTICULARS", "PERSONAL INFORMATION", "DETAILS",
         "CONTACT", "MY CONTACT", "CONTACT INFORMATION", "CONTACT DETAILS", "ADDRESS",
         # Common on a CV but not one of the 20 MDX sections, so per §8 their
         # content belongs in the unmapped note rather than being force-fit
