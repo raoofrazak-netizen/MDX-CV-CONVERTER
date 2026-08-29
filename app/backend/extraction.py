@@ -295,12 +295,38 @@ import re
 GARBLED_SINGLE_LETTER_RATIO = 0.12
 MIN_TOKENS_FOR_GARBLE_CHECK = 100
 
+# A CV heading deliberately letter-spaced for visual effect ("C A R E E R",
+# "A C A D E M I C") extracts as a long, unbroken run of single-letter
+# tokens that concatenates back into a real word -- and a résumé can carry
+# several such headings, which is enough on its own to clear
+# GARBLED_SINGLE_LETTER_RATIO on an otherwise perfectly intact document (one
+# real CV scored 0.29 this way). Genuine corruption doesn't produce the same
+# shape: the sample in the comment above, "N AT I z N A 9 I T B" for
+# "NATIONALITY", breaks after at most 4 single-letter tokens before a digit
+# or multi-character fragment interrupts it -- a broken character map
+# remaps by glyph id, not by "letter versus non-letter", so it has no reason
+# to consistently produce long, uninterrupted single-letter runs. Only a run
+# at least this long is treated as a heading rather than stray corruption,
+# leaving a wide margin below it for genuine garble.
+LETTER_SPACED_HEADING_MIN_RUN = 6
+
 
 def _looks_garbled(text: str) -> bool:
     tokens = text.split()
     if len(tokens) < MIN_TOKENS_FOR_GARBLE_CHECK:
         return False
-    strays = sum(1 for t in tokens if len(t) == 1 and t.isalpha())
+    strays = 0
+    i = 0
+    while i < len(tokens):
+        if len(tokens[i]) == 1 and tokens[i].isalpha():
+            run_start = i
+            while i < len(tokens) and len(tokens[i]) == 1 and tokens[i].isalpha():
+                i += 1
+            run_len = i - run_start
+            if run_len < LETTER_SPACED_HEADING_MIN_RUN:
+                strays += run_len
+        else:
+            i += 1
     return strays / len(tokens) > GARBLED_SINGLE_LETTER_RATIO
 
 
