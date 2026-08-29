@@ -324,6 +324,8 @@ def _is_junk_line(text: str) -> bool:
         return True
     if BARE_COUNTRY_RE.match(stripped):
         return True
+    if BARE_CITY_COUNTRY_RE.match(stripped):
+        return True
     return bool(BARE_EMPLOYMENT_TYPE_RE.match(stripped))
 
 
@@ -1927,6 +1929,19 @@ COUNTRY_NAMES = [
     "Dubai", "Abu Dhabi", "Sharjah", "UAE", "UK", "USA", "U.K.", "U.S.A.",
 ]
 COUNTRY_RE = re.compile(r"\b(" + "|".join(re.escape(c) for c in COUNTRY_NAMES) + r")\b")
+
+# A bare "City, Country" line -- a geographic sub-heading a CV uses to group
+# a list of entries underneath it ("PUBLIC SERVICE" followed by "Dubai,
+# UAE" then several Dubai-based entries, later "New York, USA" for the New
+# York ones), not content in its own right. Matched only against a full
+# country NAME (this curated list), never a bare 2-4 letter state/country
+# CODE -- that narrower version was tried and reverted (FIXLOG.md) because
+# it also deleted real institution names ending in a US state abbreviation
+# ("Branson University, NV"). A full country name is unambiguous enough
+# that this doesn't recur.
+BARE_CITY_COUNTRY_RE = re.compile(
+    r"^[A-Za-z .]{2,40},\s*(" + "|".join(re.escape(c) for c in COUNTRY_NAMES) + r")$"
+)
 
 # Cities that stand in for a country on a CV line ("... , Dubai").
 CITY_TO_COUNTRY = {
