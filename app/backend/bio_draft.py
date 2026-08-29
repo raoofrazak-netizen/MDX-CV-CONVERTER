@@ -27,6 +27,10 @@ BIO_SOURCE_NOTE = "(draft — assembled from extracted facts, please review and 
 
 HONORIFIC_PREFIXES = ("dr ", "prof ", "professor ", "mr ", "mrs ", "ms ", "miss ")
 
+# Same list, as bare words (no trailing space) for period-insensitive matching
+# against the first token of a name -- see _short_name().
+HONORIFIC_WORDS = {p.strip() for p in HONORIFIC_PREFIXES}
+
 
 def _first_value(items: list[dict[str, Any]], section: str) -> str:
     for item in items:
@@ -42,15 +46,23 @@ def _first_value(items: list[dict[str, Any]], section: str) -> str:
 def _short_name(full_name: str) -> str:
     """Surname-style short form for the second sentence, honorific kept if
     the CV used one ("Dr Chaudhary"), so the draft doesn't read as if it is
-    on first-name terms with a professor."""
+    on first-name terms with a professor.
+
+    Matches the first word against the honorific list with any trailing
+    period stripped, so "Dr. Alison Burrows" (period, as most CVs write it)
+    is recognised the same as "Dr Alison Burrows" (no period). Missing this
+    used to silently fall through to the no-honorific branch, folding a
+    second sentence's fact into the first one instead ("X is Y, and holds
+    Z.") -- exactly the failure this docstring's own example is meant to
+    guard against, just for the honorific case instead of the missing-name
+    case.
+    """
     name = full_name.strip()
     if not name:
         return ""
-    lowered = name.lower()
-    for prefix in HONORIFIC_PREFIXES:
-        if lowered.startswith(prefix):
-            parts = name.split()
-            return f"{parts[0]} {parts[-1]}" if len(parts) > 2 else name
+    parts = name.split()
+    if parts and parts[0].rstrip(".").casefold() in HONORIFIC_WORDS:
+        return f"{parts[0]} {parts[-1]}" if len(parts) > 2 else name
     return name
 
 
@@ -112,6 +124,32 @@ def _best_qualification(items: list[dict[str, Any]], full_name: str) -> str:
     return ""
 
 
+# Acronym first letters that are SPOKEN as a vowel sound ("M" -> "em", "H" ->
+# "aitch") even though the letter itself isn't a vowel -- "an MBA", not "a
+# MBA". Only consulted for a first word that reads as an acronym (short,
+# all-caps); an ordinary word's article always follows its own first letter.
+VOWEL_SOUND_ACRONYM_LETTERS = "FHLMNRSX"
+
+
+def _with_article(phrase: str) -> str:
+    """Prefix a job title with "a"/"an" so the opening sentence reads as
+    English ("is a Senior Lecturer", not "is Senior Lecturer"). Skipped when
+    the phrase already opens with an article, or is empty -- a title that
+    already reads fine is left alone rather than risking "a the Head of...".
+    """
+    phrase = phrase.strip()
+    if not phrase:
+        return phrase
+    first_word = phrase.split()[0]
+    if first_word.casefold() in ("a", "an", "the"):
+        return phrase
+    if first_word.isalpha() and first_word.isupper() and 1 < len(first_word) <= 5:
+        article = "an" if first_word[0] in VOWEL_SOUND_ACRONYM_LETTERS else "a"
+    else:
+        article = "an" if phrase[0].casefold() in "aeiou" else "a"
+    return f"{article} {phrase}"
+
+
 def draft_biography_text(items: list[dict[str, Any]]) -> str | None:
     """Deterministic, offline draft. Returns None when too little is known
     to say anything useful -- an empty section is better than a vacuous one."""
@@ -125,7 +163,7 @@ def draft_biography_text(items: list[dict[str, Any]]) -> str | None:
     sentences: list[str] = []
 
     if title:
-        sentences.append(f"{full_name} is {title.rstrip('.')}.")
+        sentences.append(f"{full_name} is {_with_article(title.rstrip('.'))}.")
     else:
         sentences.append(f"{full_name} is a member of academic staff at Middlesex University Dubai.")
 
