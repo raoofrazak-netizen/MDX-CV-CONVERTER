@@ -2554,6 +2554,17 @@ def _promote_present_role(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return items
 
 
+# A letterhead label the CV itself writes out ("Job title: Senior
+# Lecturer..."), matching the same set _extract_letterhead already strips
+# before storing a value -- so a raw preamble line still carrying its label
+# can be recognised as "the same fact already captured", not new content.
+_PREAMBLE_LETTERHEAD_LABEL_RE = re.compile(
+    r"^\s*(?:job\s*titles?|title|contact|phone|tel|telephone|mobile|email|e-mail"
+    r"|address|name)\s*:\s*",
+    re.IGNORECASE,
+)
+
+
 def _biography_from_preamble(
     preamble: list[str], letterhead_items: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
@@ -2581,6 +2592,17 @@ def _biography_from_preamble(
     for line in preamble:
         text = line.strip()
         if not text or text in used:
+            continue
+        # _extract_letterhead stores a label-STRIPPED value ("Senior
+        # Lecturer...", not "Job title: Senior Lecturer..."), so a raw
+        # preamble line that still carries its own label never matched the
+        # exact-string check above -- it read as 15 words of prose and
+        # became a second, bogus "biography", right alongside the real one,
+        # once a CV happened to spell its title out long enough to clear
+        # the word-count bar. Stripped the same way here, it correctly
+        # collapses onto the value already captured.
+        unlabelled = _PREAMBLE_LETTERHEAD_LABEL_RE.sub("", text).strip()
+        if unlabelled != text and unlabelled in used:
             continue
         if _is_biography_prose(text):
             return {
