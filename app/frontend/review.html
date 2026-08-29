@@ -159,6 +159,7 @@ async function loadAll() {
 
     renderReviewBar(report);
     renderQuality(report, cv.status);
+    renderNameMismatchNotice(items, cv);
     renderSections(items, cv);
     restoreFocus();
     document.getElementById("auditCard").style.display = "block";
@@ -211,6 +212,30 @@ function renderHardToParseBanner(report) {
   } else {
     el.innerHTML = "";
   }
+}
+
+// Intentionally loose (substring/token, not exact) -- the goal is catching
+// the "CV_final_v2.docx" case (HANDOVER.md §7), not flagging every
+// reasonable filename variation. A hint, not a validation failure: affects
+// nothing about processing, confidence, or approval status.
+function renderNameMismatchNotice(itemsBySection, cv) {
+  const el = document.getElementById("nameMismatchBanner");
+  const nameItem = (itemsBySection.full_name || [])[0];
+  const name = ((nameItem && nameItem.fields && nameItem.fields.value) || "").trim();
+  if (!name) { el.innerHTML = ""; return; }
+
+  const filename = (cv.original_filename || "").replace(/\.[^.]+$/, "");
+  const tokenize = s => s.toLowerCase().split(/[^a-z0-9]+/).filter(t => t.length > 1);
+  const nameTokens = tokenize(name);
+  const filenameTokens = new Set(tokenize(filename));
+  if (!nameTokens.length) { el.innerHTML = ""; return; }
+
+  const matched = nameTokens.filter(t => filenameTokens.has(t)).length;
+  const mostMatch = matched >= Math.ceil(nameTokens.length / 2);
+
+  el.innerHTML = mostMatch ? "" : `<div class="banner-warn">Detected name: <strong>${name}</strong> — ` +
+    `this doesn't obviously match the uploaded filename (${cv.original_filename}). ` +
+    `Worth a quick check against the Full Name item below.</div>`;
 }
 
 function renderQuality(report, cvStatus) {
