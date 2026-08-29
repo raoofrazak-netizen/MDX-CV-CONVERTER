@@ -2428,6 +2428,42 @@ def _promote_present_role(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return items
 
 
+def _biography_from_preamble(
+    preamble: list[str], letterhead_items: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """An unlabeled summary paragraph sitting between the contact block and
+    the CV's first recognised heading -- no "SUMMARY"/"PROFILE"/"ABOUT"
+    heading above it at all, just prose right under the name.
+
+    This is a common, ordinary CV shape, and it used to be a silent loss:
+    nothing here classifies preamble CONTENT into a section -- the preamble
+    is only ever scanned for name/title/contact candidates -- so the
+    person's own hand-written biography fell all the way through to the
+    Unmapped safety net, which does not appear in the generated document.
+    A much thinner, auto-drafted biography (bio_draft.py) then took its
+    place, because that drafter only runs when no real biography item
+    exists at all -- it had no way to know a real one was sitting right
+    there, misfiled.
+
+    Scoped narrowly: the same prose-shape test biography content already
+    gets under a real heading (`_is_biography_prose` -- long enough to read
+    as a sentence, not phone/email-shaped, not dominated by uppercase), and
+    never a line the letterhead scan already claimed as the name, title,
+    contact number, or email.
+    """
+    used = {(i.get("source_text") or "").strip() for i in letterhead_items}
+    for line in preamble:
+        text = line.strip()
+        if not text or text in used:
+            continue
+        if _is_biography_prose(text):
+            return {
+                "section": "biography", "fields": {},
+                "source_text": text, "confidence": 0.75,
+            }
+    return None
+
+
 def classify_rule_based(cv_text: str, source_document: str) -> list[dict[str, Any]]:
     lines = cv_text.splitlines()
 
@@ -2441,6 +2477,10 @@ def classify_rule_based(cv_text: str, source_document: str) -> list[dict[str, An
     items: list[dict[str, Any]] = _extract_letterhead(
         sorted(running_headers, key=len, reverse=True) + preamble, cv_text, source_document
     )
+
+    preamble_bio = _biography_from_preamble(preamble, items)
+    if preamble_bio:
+        items.append(preamble_bio)
 
     current_pub_subgroup: str | None = None
     for key, raw_body_lines in sections.items():

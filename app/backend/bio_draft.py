@@ -144,10 +144,59 @@ def _with_article(phrase: str) -> str:
     if first_word.casefold() in ("a", "an", "the"):
         return phrase
     if first_word.isalpha() and first_word.isupper() and 1 < len(first_word) <= 5:
-        article = "an" if first_word[0] in VOWEL_SOUND_ACRONYM_LETTERS else "a"
+        # A literal vowel ("AV", "IT") is spoken as itself, same as any
+        # ordinary word starting with one -- only a CONSONANT that happens
+        # to be spoken with a vowel sound ("M" -> "em") needs the lookup.
+        article = "an" if first_word[0] in "AEIOU" + VOWEL_SOUND_ACRONYM_LETTERS else "a"
     else:
         article = "an" if phrase[0].casefold() in "aeiou" else "a"
     return f"{article} {phrase}"
+
+
+def _all_degrees(items: list[dict[str, Any]]) -> list[str]:
+    """Every distinct degree name this CV's Qualifications hold a
+    structured `degree` field for, each paired with its own institution
+    when that same item also has one -- so the biography can list a
+    person's full academic background instead of picking a single "best"
+    entry. Nothing here is inferred across items: an institution is only
+    attached to the degree it was extracted alongside."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if item["section"] != "qualifications":
+            continue
+        fields = item.get("fields", {}) or {}
+        degree = (fields.get("degree") or "").strip()
+        if not degree or degree.casefold() in seen:
+            continue
+        seen.add(degree.casefold())
+        institution = (fields.get("institution") or "").strip()
+        out.append(f"{degree} from {institution}" if institution else degree)
+    return out
+
+
+def _join_with_articles(phrases: list[str]) -> str:
+    worded = [_with_article(p) for p in phrases]
+    if len(worded) == 1:
+        return worded[0]
+    if len(worded) == 2:
+        return f"{worded[0]} and {worded[1]}"
+    return ", ".join(worded[:-1]) + f", and {worded[-1]}"
+
+
+def _years_of_experience(items: list[dict[str, Any]]) -> int:
+    """Years since the earliest Present/Previous Employment start date --
+    arithmetic on a year already extracted from the CV, not a guess. Zero
+    when no entry has a usable 4-digit start year."""
+    from datetime import datetime
+
+    years = [
+        int(start) for item in items
+        if item["section"] in ("present_employment", "previous_employment")
+        for start in [str((item.get("fields", {}) or {}).get("start_date", "")).strip()]
+        if start.isdigit() and len(start) == 4
+    ]
+    return max(0, datetime.now().year - min(years)) if years else 0
 
 
 def draft_biography_text(items: list[dict[str, Any]]) -> str | None:
@@ -158,17 +207,34 @@ def draft_biography_text(items: list[dict[str, Any]]) -> str | None:
         return None
 
     title = _first_value(items, "job_title") or _first_value(items, "present_employment")
+    years = _years_of_experience(items)
+    degrees = _all_degrees(items)
     qualification = _best_qualification(items, full_name)
 
     sentences: list[str] = []
 
+    # A derived fact (arithmetic on years already extracted), not a guess --
+    # only added when there's at least 2 years to say anything meaningful
+    # ("with over 1 years" reads oddly and adds little).
+    experience_clause = f", with over {years} years of experience" if years >= 2 else ""
     if title:
-        sentences.append(f"{full_name} is {_with_article(title.rstrip('.'))}.")
+        sentences.append(f"{full_name} is {_with_article(title.rstrip('.'))}{experience_clause}.")
     else:
-        sentences.append(f"{full_name} is a member of academic staff at Middlesex University Dubai.")
+        sentences.append(
+            f"{full_name} is a member of academic staff at Middlesex University Dubai{experience_clause}."
+        )
 
     short = _short_name(full_name)
-    if qualification:
+    if len(degrees) >= 2:
+        # List every distinct degree rather than just the single "best" one
+        # _best_qualification picks -- a fuller academic background reads
+        # better than one degree chosen somewhat arbitrarily.
+        head = _join_with_articles(degrees)
+        if short == full_name:
+            sentences[0] = sentences[0].rstrip(".") + f", and holds {head}."
+        else:
+            sentences.append(f"{short} holds {head}.")
+    elif qualification:
         # Trim to the degree clause; qualification lines often carry a long
         # tail (thesis title, supervisors) that does not belong in a bio.
         head = qualification.split("|")[0].split(" - Thesis")[0].strip().rstrip(",.")
