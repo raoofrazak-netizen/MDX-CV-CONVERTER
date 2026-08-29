@@ -12,7 +12,11 @@ from typing import Any
 import anthropic
 
 from config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, SECTION_KEYS
-from rule_classifier import _find_running_headers, classify_rule_based
+from rule_classifier import (
+    _find_running_headers,
+    _merge_split_letter_spaced_headings,
+    classify_rule_based,
+)
 
 
 class ClassificationError(Exception):
@@ -182,12 +186,21 @@ def _validate_against_source(raw_items: list[dict[str, Any]], cv_text: str) -> l
     # the raw text rejects that item as unquotable and DISCARDS it -- data
     # loss dressed up as a safety check. Both copies preserve the source's
     # own text and order, so nothing fabricated can pass either one.
-    running_headers = _find_running_headers(cv_text.splitlines())
-    normalized_body = " ".join(
-        " ".join(
-            line for line in cv_text.splitlines()
-            if " ".join(line.split()) not in running_headers
-        ).split()
+    body_lines = cv_text.splitlines()
+    running_headers = _find_running_headers(body_lines)
+    body_lines = [l for l in body_lines if " ".join(l.split()) not in running_headers]
+    normalized_body = " ".join(" ".join(body_lines).split())
+    # A third reference copy, letter-spaced-heading-merged exactly the way
+    # classify_rule_based's own input is: a template that splits one heading
+    # across two letter-spaced lines with unrelated content between them
+    # (see _merge_split_letter_spaced_headings) reunites a paragraph the
+    # same interleaved content used to break in two -- and the resulting
+    # item's source_text is then, correctly, no longer a contiguous
+    # substring of the UNMERGED original. Checking it here too is the same
+    # "don't let a safety check cause the very data loss it exists to
+    # prevent" reasoning as the running-header copy above.
+    normalized_merged = " ".join(
+        " ".join(_merge_split_letter_spaced_headings(body_lines)).split()
     )
 
     validated = []
@@ -200,6 +213,7 @@ def _validate_against_source(raw_items: list[dict[str, Any]], cv_text: str) -> l
             if (
                 normalized_quote not in normalized_source
                 and normalized_quote not in normalized_body
+                and normalized_quote not in normalized_merged
             ):
                 continue
         if item.get("section") not in SECTION_KEYS:

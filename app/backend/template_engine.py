@@ -192,18 +192,28 @@ def _populate_letterhead(doc_xml: str, items_by_section: dict[str, list[dict]]) 
             new_table_xml = new_table_xml.replace(para, new_para, 1)
             idx = 1
             continue
-        if idx == 1 and job_title and text.lower().startswith("job title"):
-            new_para = _replace_first_run_text(para, f"Job title: {job_title}")
+        # Each of these three fields replaces the template's own "how to
+        # fill this in" placeholder text ("Job title: List each title
+        # individually, with Professor...") whether or not a real value was
+        # found -- clearing to a blank line when nothing was classified,
+        # never leaving that guidance text in a document handed to HR. Only
+        # the presence check moved; which value fills the line still comes
+        # from the classifier exactly as before.
+        if idx == 1 and text.lower().startswith("job title"):
+            new_text = f"Job title: {job_title}" if job_title else ""
+            new_para = _replace_first_run_text(para, new_text)
             new_table_xml = new_table_xml.replace(para, new_para, 1)
             idx = 2
             continue
-        if idx == 2 and contact and text.lower().startswith("contact"):
-            new_para = _replace_first_run_text(para, f"Contact: {contact}")
+        if idx == 2 and text.lower().startswith("contact"):
+            new_text = f"Contact: {contact}" if contact else ""
+            new_para = _replace_first_run_text(para, new_text)
             new_table_xml = new_table_xml.replace(para, new_para, 1)
             idx = 3
             continue
-        if idx == 3 and email and text.lower().startswith("email"):
-            new_para = _replace_first_run_text(para, f"Email: {email}")
+        if idx == 3 and text.lower().startswith("email"):
+            new_text = f"Email: {email}" if email else ""
+            new_para = _replace_first_run_text(para, new_text)
             new_table_xml = new_table_xml.replace(para, new_para, 1)
             idx = 4
             continue

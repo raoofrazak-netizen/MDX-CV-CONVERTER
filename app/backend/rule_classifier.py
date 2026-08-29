@@ -121,7 +121,7 @@ SYNONYM_HEADINGS: dict[str, list[str]] = {
     "qualifications": [
         "EDUCATION", "CERTIFICATIONS", "CERTIFICATIONS AND TRAININGS",
         "EDUCATION AND QUALIFICATIONS", "ACADEMIC QUALIFICATIONS",
-        "CERTIFICATES", "CERTIFICATE",
+        "ACADEMIC CREDENTIALS", "CERTIFICATES", "CERTIFICATE",
     ],
     "associations": [
         "PROFESSIONAL MEMBERSHIPS", "MEMBERSHIPS AND FELLOWSHIPS", "ASSOCIATIONS",
@@ -1245,6 +1245,89 @@ def _split_glued_heading(line: str) -> tuple[str, str, str] | None:
     if not key:
         return None
     return head, key, rest
+
+
+# A heading a template letter-spaces for visual effect ("C A R E E R",
+# "A C A D E M I C") extracts as one line per word, each word a run of
+# single-letter tokens. Mirrors extraction.py's own garble-check threshold:
+# short of this length a run reads as noise, not a deliberately spaced word.
+_LETTER_SPACED_LINE_RUN_MIN = 6
+LETTER_SPACED_HEADING_LOOKAHEAD = 6
+
+
+def _is_whole_line_letter_spaced(line: str) -> bool:
+    tokens = line.split()
+    return len(tokens) >= _LETTER_SPACED_LINE_RUN_MIN and all(
+        len(t) == 1 and t.isalpha() for t in tokens
+    )
+
+
+def _collapse_letter_spaced(line: str) -> str:
+    return "".join(line.split())
+
+
+def _merge_split_letter_spaced_headings(lines: list[str]) -> list[str]:
+    """Reunite a two-word letter-spaced heading whose words were separated
+    onto different lines by the document's own layout, with unrelated
+    content sitting between them in extraction order.
+
+    A résumé built on a layout TABLE can place each word of a stacked
+    heading in its own cell, sharing a row with a fragment of nearby body
+    text in the adjacent cell -- "CAREER" paired with the first half of the
+    objective paragraph in one row, "OBJECTIVE" paired with the second half
+    in the next. Walking the document in raw paragraph order (extraction.py
+    has to: templates route real content through text boxes and table cells
+    just as often as the body) then interleaves "CAREER" / paragraph-half-1
+    / "OBJECTIVE" / paragraph-half-2 -- so neither the heading nor the
+    paragraph beneath it is ever recognisable as a whole.
+
+    Only merges when the traditional constraint holds regardless: the two
+    collapsed words, joined with a space, must resolve to a real known
+    heading. Two unrelated single-word letter-spaced headings that simply
+    happen to sit within a few lines of each other (a short "SKILLS"
+    section followed shortly by "LANGUAGES") do not combine into anything
+    _find_heading_key recognises, so they are left exactly as they were.
+    A collapsed word that already resolves on its own ("S K I L L S" ->
+    "SKILLS") is never held back waiting for a partner that isn't coming.
+    """
+    out: list[str] = []
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+        if not _is_whole_line_letter_spaced(line):
+            out.append(line)
+            i += 1
+            continue
+        collapsed = _collapse_letter_spaced(line)
+        if _find_heading_key(collapsed) is not None:
+            out.append(collapsed)
+            i += 1
+            continue
+        merged_at = None
+        for j in range(i + 1, min(n, i + 1 + LETTER_SPACED_HEADING_LOOKAHEAD)):
+            if not _is_whole_line_letter_spaced(lines[j]):
+                continue
+            combined = f"{collapsed} {_collapse_letter_spaced(lines[j])}"
+            if _find_heading_key(combined) is not None:
+                out.append(combined)
+                out.extend(lines[i + 1 : j])
+                merged_at = j
+                break
+        if merged_at is not None:
+            i = merged_at + 1
+            continue
+        # Neither the line alone nor any combination with a nearby fragment
+        # resolves to a real heading -- leave the ORIGINAL line untouched,
+        # not the collapsed guess. Emitting a collapsed word here can lose a
+        # real word boundary within it ("R E S U M E S U M M A R Y", one
+        # continuous run with no gap marking where "RESUME" ends and
+        # "SUMMARY" begins, collapses to "RESUMESUMMARY") -- text that
+        # matches nothing _find_heading_key would ever resolve anyway, and
+        # that the verbatim-quote guard downstream then discards outright
+        # because it no longer appears in the source CV at all.
+        out.append(line)
+        i += 1
+    return out
 
 
 def _split_into_sections(
@@ -2707,6 +2790,7 @@ def classify_rule_based(cv_text: str, source_document: str) -> list[dict[str, An
 
     running_headers = _find_running_headers(lines)
     body_lines = [l for l in lines if " ".join(l.split()) not in running_headers]
+    body_lines = _merge_split_letter_spaced_headings(body_lines)
     preamble, sections, authoritative = _split_into_sections(body_lines)
 
     # The running header goes in front of the letterhead candidates: on an
