@@ -1620,6 +1620,77 @@ EMPLOYER_CITY_STATE_DATE_RE = re.compile(
 )
 
 
+# A label a CV uses to introduce a run of public-engagement activity
+# (conferences organised, keynote talks given) inside the SAME heading as
+# its actual job entries, with no heading of its own the classifier would
+# otherwise recognise. Narrow to the two concrete phrasings seen -- this is
+# a content-based signal, not a shape-based one, so it can't misfire the
+# way a general "this looks like a new heading" detector already proved it
+# does (see FIXLOG.md's three rejected attempts).
+KNOWLEDGE_EXCHANGE_MARKER_RE = re.compile(
+    r"^(?:Special Projects and Conferences|Conference Presentations|Keynote Speeches)\b",
+    re.IGNORECASE,
+)
+
+
+def _split_employment_and_practice_zones(
+    raw_lines: list[str],
+) -> list[tuple[str, list[str]]]:
+    """Partition an Employment section's raw lines into ('employment', […])
+    and ('knowledge_exchange', […]) runs.
+
+    A CV spanning many years commonly folds public-engagement work into the
+    same "Professional Experience" heading as actual jobs, introduced by a
+    label like "Special Projects and Conferences" rather than a heading of
+    its own. Content after such a label is professional practice, not
+    employment, until a REAL job restarts -- recognised the same way a
+    job's own header is recognised elsewhere in this module: an "Employer,
+    City, ST/Country (dates)" line immediately followed by a bare job-title
+    line (see `_employment_body_entries`). That symmetry is what keeps this
+    safe: the boundary is content the CV itself wrote in a job's own shape,
+    not a guess about layout.
+    """
+    zones: list[tuple[str, list[str]]] = []
+    kind = "employment"
+    current: list[str] = []
+    i, n = 0, len(raw_lines)
+    while i < n:
+        line = raw_lines[i]
+        stripped = line.strip()
+        if kind == "employment" and KNOWLEDGE_EXCHANGE_MARKER_RE.match(stripped):
+            if current:
+                zones.append((kind, current))
+            current, kind = [line], "knowledge_exchange"
+            i += 1
+            continue
+        if kind == "knowledge_exchange":
+            next_line = raw_lines[i + 1].strip() if i + 1 < n else ""
+            # A real job restarting is recognised by a YEAR RANGE (not a
+            # single date -- a one-off conference never has a range) paired
+            # with a bare title-shaped line right after it. Deliberately
+            # looser than EMPLOYER_CITY_STATE_DATE_RE's exact shape: a real
+            # employer line here is often untidy in ways that pattern
+            # doesn't cover ("Super Sprowtz, Nutrition Edutainment - New
+            # York, NY"), and missing the restart silently swallows every
+            # later real job into this zone too, which is a worse outcome
+            # than the one this whole fix exists to correct.
+            restarts_job = (
+                YEAR_RANGE_RE.search(stripped)
+                and BARE_TITLE_LINE_RE.match(next_line)
+                and any(kw in next_line.lower() for kw in TITLE_KEYWORDS)
+            )
+            if restarts_job:
+                if current:
+                    zones.append((kind, current))
+                current, kind = [], "employment"
+                continue  # re-process this line under the new zone
+        current.append(line)
+        i += 1
+    if current:
+        zones.append((kind, current))
+    return zones
+
+
 def _employment_body_entries(
     body_items: list[str], employer_key: str
 ) -> list[tuple[str, dict[str, Any]]]:
@@ -2520,48 +2591,67 @@ def classify_rule_based(cv_text: str, source_document: str) -> list[dict[str, An
                         "source_text": raw_line.strip(), "confidence": 0.75,
                     })
             continue
-        # Junk is filtered BEFORE grouping, not after. Filtering afterwards
-        # discards a whole merged item because part of it was junk: one CV
-        # lost the real responsibility "Answering the phone and directing
-        # calls" because the vendor's advertising ran on directly after it
-        # and the two merged into a single item.
-        # A junk line becomes a SEGMENT_BREAK rather than simply vanishing.
-        # Removing it outright makes its neighbours adjacent when they were
-        # not, and grouping then merges them into text that appears nowhere
-        # in the CV -- which the verbatim guard discards, losing a real item.
-        body_items = _group_into_items(
-            [SEGMENT_BREAK if (_is_junk_line(l) or _is_bare_contact_line(l)) else l
-             for l in raw_body_lines],
-            section_key=key,
-        )
+        def _group(lines: list[str]) -> list[str]:
+            # Junk is filtered BEFORE grouping, not after. Filtering
+            # afterwards discards a whole merged item because part of it
+            # was junk: one CV lost the real responsibility "Answering the
+            # phone and directing calls" because the vendor's advertising
+            # ran on directly after it and the two merged into one item.
+            # A junk line becomes a SEGMENT_BREAK rather than simply
+            # vanishing. Removing it outright makes its neighbours adjacent
+            # when they were not, and grouping then merges them into text
+            # that appears nowhere in the CV -- discarded by the verbatim
+            # guard, losing a real item.
+            return _group_into_items(
+                [SEGMENT_BREAK if (_is_junk_line(l) or _is_bare_contact_line(l)) else l
+                 for l in lines],
+                section_key=key,
+            )
 
-        if key == "_generic_employment":
-            for text, fields in _employment_body_entries(body_items, "employer"):
-                employer = fields.get("employer", "").lower()
-                is_current = not fields.get("end_date")
-                target = "present_employment" if (is_current and "middlesex" in employer) else "previous_employment"
-                if target == "present_employment" and "employer" in fields:
-                    fields["unit"] = fields.pop("employer")
-                items.append({
-                    "section": target, "fields": fields,
-                    "source_text": text, "confidence": 0.65,
-                })
+        if key in ("_generic_employment", "present_employment", "previous_employment"):
+            # A block under one Employment-type heading can fold in
+            # public-engagement content (conferences organised, keynote
+            # talks) with no heading of its own -- split that out first, so
+            # it never even reaches employment field-parsing.
+            for zone_kind, zone_lines in _split_employment_and_practice_zones(raw_body_lines):
+                if zone_kind == "knowledge_exchange":
+                    for text in _group(zone_lines):
+                        if KNOWLEDGE_EXCHANGE_MARKER_RE.match(text):
+                            continue  # the label line itself, not content
+                        items.append({
+                            "section": "knowledge_exchange", "fields": {},
+                            "source_text": text, "confidence": 0.6,
+                            "validation_flags": ["rerouted_by_content"],
+                        })
+                    continue
+                body_items = _group(zone_lines)
+                if key == "_generic_employment":
+                    for text, fields in _employment_body_entries(body_items, "employer"):
+                        employer = fields.get("employer", "").lower()
+                        is_current = not fields.get("end_date")
+                        target = "present_employment" if (is_current and "middlesex" in employer) else "previous_employment"
+                        if target == "present_employment" and "employer" in fields:
+                            fields["unit"] = fields.pop("employer")
+                        items.append({
+                            "section": target, "fields": fields,
+                            "source_text": text, "confidence": 0.65,
+                        })
+                else:
+                    employer_key = "unit" if key == "present_employment" else "employer"
+                    for text, fields in _employment_body_entries(body_items, employer_key):
+                        items.append({
+                            "section": key, "fields": fields,
+                            "source_text": text, "confidence": 0.8,
+                        })
             continue
+
+        body_items = _group(raw_body_lines)
 
         if key == "grants":
             for grant in _structure_grants(body_items):
                 items.append({
                     "section": "grants", "fields": grant["fields"],
                     "source_text": grant["source_text"], "confidence": 0.75,
-                })
-            continue
-
-        if key in ("present_employment", "previous_employment"):
-            employer_key = "unit" if key == "present_employment" else "employer"
-            for text, fields in _employment_body_entries(body_items, employer_key):
-                items.append({
-                    "section": key, "fields": fields,
-                    "source_text": text, "confidence": 0.8,
                 })
             continue
 
