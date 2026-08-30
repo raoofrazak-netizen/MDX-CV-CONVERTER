@@ -182,6 +182,7 @@ SYNONYM_HEADINGS: dict[str, list[str]] = {
         "SKILLS", "KEY SKILLS", "CORE SKILLS", "TECHNICAL SKILLS", "IT SKILLS",
         "SOFT SKILLS", "PERSONAL SKILLS", "OTHER SKILLS", "TECHNICAL PROFICIENCY",
         "DIGITAL AND TECHNICAL SKILLS", "DIGITAL SKILLS", "AREAS OF EXPERTISE",
+        "IT PROFICIENCY",
     ],
     "language_proficiency": [
         "LANGUAGES", "LANGUAGES KNOWN", "LANGUAGE PROFICIENCY", "LANGUAGE SKILLS",
@@ -332,7 +333,16 @@ def _is_junk_line(text: str) -> bool:
         return True
     if BARE_CITY_COUNTRY_RE.match(stripped):
         return True
-    return bool(BARE_EMPLOYMENT_TYPE_RE.match(stripped))
+    if BARE_EMPLOYMENT_TYPE_RE.match(stripped):
+        return True
+    # A letter-spaced heading fragment _merge_split_letter_spaced_headings
+    # could not resolve to any known heading (so it was left as the
+    # original, unmerged line) is still not real content -- genuine CV
+    # content is never written one letter at a time. Left unfiltered, it
+    # becomes its own bare, ugly bullet under whatever section it landed in
+    # ("S T R E N G T H A N D") rather than being silently absorbed the way
+    # a resolved heading fragment already is.
+    return _is_whole_line_letter_spaced(stripped)
 
 
 # "142 Your Address Blvd." -- a candidate filled in their real name, skills
@@ -1247,6 +1257,61 @@ def _split_glued_heading(line: str) -> tuple[str, str, str] | None:
     return head, key, rest
 
 
+WRAPPED_HEADING_LOOKAHEAD = 2
+
+
+def _merge_wrapped_headings(lines: list[str]) -> list[str]:
+    """Reunite a heading whose words wrapped onto separate physical lines --
+    a narrow sidebar column commonly breaks "PERSONAL INFORMATION" into
+    "PERSONAL" then "INFORMATION" two lines later, each an ordinary single
+    word with no letter-spacing at all. _find_heading_key only ever looks
+    at one line at a time, so a heading split this way is invisible to it,
+    and everything beneath it silently joins whatever section was still
+    open above -- one CV's Language Proficiency section absorbed a wrapped
+    "PERSONAL INFORMATION" heading's own age/nationality/visa details this
+    way, because the actual language list was the last real content before
+    the wrap.
+
+    Tries joining the current heading-shaped line with the next one, then
+    the next two, accepting a merge only when the combined text resolves to
+    a real known heading via _exact_heading_key -- the same "only accept a
+    match against actual vocabulary" guard used everywhere else in this
+    module. Two ordinary short lines that simply happen to sit next to each
+    other (a bullet-free skills list, say) essentially never combine into
+    anything _exact_heading_key recognises, so they are left untouched.
+    """
+    out: list[str] = []
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+        stripped = line.strip()
+        normalized = _normalize_heading(stripped)
+        if not _looks_like_heading_line(stripped, normalized):
+            out.append(line)
+            i += 1
+            continue
+        merged_at = None
+        for extra in range(1, WRAPPED_HEADING_LOOKAHEAD + 1):
+            if i + extra >= n:
+                break
+            candidates = [stripped] + [lines[i + k].strip() for k in range(1, extra + 1)]
+            if not all(
+                _looks_like_heading_line(c, _normalize_heading(c)) for c in candidates
+            ):
+                break
+            key = _exact_heading_key(_normalize_heading(" ".join(candidates)))
+            if key is not None:
+                out.append(" ".join(candidates))
+                merged_at = i + extra
+                break
+        if merged_at is not None:
+            i = merged_at + 1
+            continue
+        out.append(line)
+        i += 1
+    return out
+
+
 # A heading a template letter-spaces for visual effect ("C A R E E R",
 # "A C A D E M I C") extracts as one line per word, each word a run of
 # single-letter tokens. Mirrors extraction.py's own garble-check threshold:
@@ -1264,6 +1329,46 @@ def _is_whole_line_letter_spaced(line: str) -> bool:
 
 def _collapse_letter_spaced(line: str) -> str:
     return "".join(line.split())
+
+
+def _exact_heading_key(normalized: str) -> str | None:
+    """Same lookup _find_heading_key starts with, minus every looser
+    fallback after it (qualifier-stripping, substring-contains, fuzzy
+    typo-tolerance). Used where trying many candidate strings in a loop
+    makes the looser stages actively dangerous rather than just unhelpful:
+    fuzzy matching at 0.86 similarity is safe against one real heading
+    line, but run across every possible split point of a squashed-together
+    word, it will happily match splits that land it at the WRONG boundary
+    ("PE RSONALDETAILS" fuzzy-matched something before the real "PERSONAL
+    DETAILS" split further along was ever tried).
+    """
+    if normalized in _OFFICIAL_HEADINGS:
+        return _OFFICIAL_HEADINGS[normalized]
+    if normalized in _CUSTOM_HEADINGS:
+        return _CUSTOM_HEADINGS[normalized]
+    for phrase, key in _SYNONYM_LOOKUP:
+        if normalized == phrase:
+            return key
+    return None
+
+
+def _split_letter_spaced_words(collapsed: str) -> str | None:
+    """A collapsed run with no recoverable word-boundary spacing might still
+    BE exactly two known words squashed together -- "PERSONALDETAILS" for
+    "PERSONAL DETAILS", where the letter-spacing gap between every letter is
+    the same whether it's inside a word or between two words, so no larger
+    gap ever marked where one word ends and the next begins. Tries
+    inserting one space at each position and keeps the first split whose
+    two-word form resolves to a real known heading -- checked with
+    _exact_heading_key, not the full _find_heading_key, so a run that isn't
+    really two heading words squashed together never matches anything by
+    chance (see that function's docstring for why).
+    """
+    for i in range(2, len(collapsed) - 1):
+        candidate = f"{collapsed[:i]} {collapsed[i:]}"
+        if _exact_heading_key(candidate) is not None:
+            return candidate
+    return None
 
 
 def _merge_split_letter_spaced_headings(lines: list[str]) -> list[str]:
@@ -1301,6 +1406,11 @@ def _merge_split_letter_spaced_headings(lines: list[str]) -> list[str]:
         collapsed = _collapse_letter_spaced(line)
         if _find_heading_key(collapsed) is not None:
             out.append(collapsed)
+            i += 1
+            continue
+        split = _split_letter_spaced_words(collapsed)
+        if split is not None:
+            out.append(split)
             i += 1
             continue
         merged_at = None
@@ -2251,6 +2361,16 @@ def _role_kind(text: str) -> str | None:
     return None
 
 
+# A grade/GPA fact printed on its own wrapped line, one CV entry's trailing
+# detail rather than a whole fact of its own -- "Bachelor of Engineering...
+# / 2010 - 2014 / GPA: 7.4 / 10" wraps across three physical lines with the
+# GPA landing last. Read alone it carries no degree, institution, or year of
+# its own, so the "no qualification signal" check just below would file it
+# under Skills as if it were a stray trait sentence -- moving a grade that
+# plainly belongs to the qualification right above it into an unrelated
+# section instead of onto the end of that qualification's own line.
+BARE_GPA_LINE_RE = re.compile(r"^(?:GPA|CGPA)\s*:?\s*[\d.]+(?:\s*/\s*[\d.]+)?\.?$", re.IGNORECASE)
+
 # Where a subject name stops. Everything from here on is a grade, a thesis,
 # a skills list or the start of the next entry -- never part of the subject.
 SUBJECT_STOP_RE = re.compile(
@@ -2790,6 +2910,7 @@ def classify_rule_based(cv_text: str, source_document: str) -> list[dict[str, An
 
     running_headers = _find_running_headers(lines)
     body_lines = [l for l in lines if " ".join(l.split()) not in running_headers]
+    body_lines = _merge_wrapped_headings(body_lines)
     body_lines = _merge_split_letter_spaced_headings(body_lines)
     preamble, sections, authoritative = _split_into_sections(body_lines)
 
@@ -2979,6 +3100,13 @@ def classify_rule_based(cv_text: str, source_document: str) -> list[dict[str, An
                 # a year -- almost certainly isn't one, and reads as a
                 # skill/summary sentence instead; same treatment biography
                 # already gets when its heading is shared with a skills list.
+                if (
+                    BARE_GPA_LINE_RE.match(text.strip())
+                    and items and items[-1]["section"] == "qualifications"
+                ):
+                    prev = items[-1]
+                    prev["source_text"] = f"{prev['source_text']} {text.strip()}".strip()
+                    continue
                 if not (
                     DEGREE_RE.search(text) or INSTITUTION_RE.search(text)
                     or INSTITUTION_LEADING_RE.search(text) or CALENDAR_YEAR_RE.search(text)

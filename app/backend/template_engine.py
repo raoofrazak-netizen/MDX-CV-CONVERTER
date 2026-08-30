@@ -357,6 +357,27 @@ def _populate_sections(doc_xml: str, items_by_section: dict[str, list[dict]]) ->
         ppr = _para_ppr(template_para)
         rpr = _first_content_run_rpr(template_para)
 
+        if key == "biography":
+            # A biography is one written paragraph about the person, even
+            # when the source text behind it was grouped into several
+            # separate sentence-level items (a résumé's summary commonly
+            # wraps across physical lines with no shared punctuation to
+            # stitch them into one grouped chunk upstream). Rendering one
+            # bullet per item then shows the reader a bulleted list where
+            # the CV had a plain paragraph -- every other biography in the
+            # corpus happens to classify as a single item, which is the
+            # only reason this was never visible before. Joined with a
+            # single space in item order, matching how the sentences
+            # originally read on the page.
+            text = " ".join(
+                format_item(key, it.get("fields", {}) or {}, it.get("source_text", "")).strip()
+                for it in items
+            ).strip()
+            new_paras_xml = _build_paragraph(ppr, rpr, text) if text else ""
+            old_block = "".join(body_paras)
+            doc_xml = doc_xml.replace(old_block, new_paras_xml, 1)
+            continue
+
         if key == "editorial_roles":
             # Unlike Publications, editorial items are NOT reliably contiguous
             # by kind in the source -- a CV commonly interleaves "Reviewer,

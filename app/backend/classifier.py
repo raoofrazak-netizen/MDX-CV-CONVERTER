@@ -15,6 +15,7 @@ from config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, SECTION_KEYS
 from rule_classifier import (
     _find_running_headers,
     _merge_split_letter_spaced_headings,
+    _merge_wrapped_headings,
     classify_rule_based,
 )
 
@@ -200,7 +201,9 @@ def _validate_against_source(raw_items: list[dict[str, Any]], cv_text: str) -> l
     # "don't let a safety check cause the very data loss it exists to
     # prevent" reasoning as the running-header copy above.
     normalized_merged = " ".join(
-        " ".join(_merge_split_letter_spaced_headings(body_lines)).split()
+        " ".join(
+            _merge_split_letter_spaced_headings(_merge_wrapped_headings(body_lines))
+        ).split()
     )
 
     validated = []
