@@ -270,6 +270,27 @@ def test_split_dual_title_job_title_produces_two_lines_with_institution_stripped
     assert result[0]["confidence"] <= 0.65
 
 
+def test_trailing_institution_with_no_comma_before_campus_is_still_stripped():
+    # Real live-test gap: "Middlesex University Dubai" has no comma between
+    # the institution and the campus/city word, unlike the comma-separated
+    # form the original fix was built against ("...University, Dubai
+    # Campus"). Both forms must strip.
+    items = [{
+        "section": "job_title",
+        "fields": {"value": (
+            "Lecturer in Graphic Design, Department of Art and Design, "
+            "Middlesex University Dubai"
+        )},
+        "source_text": "irrelevant",
+        "confidence": 0.7,
+    }]
+    result = rc._clean_job_titles(items)
+    assert result[0]["fields"]["value"] == (
+        "Lecturer in Graphic Design, Department of Art and Design"
+    )
+    assert "institution_stripped_from_title" in result[0]["validation_flags"]
+
+
 def test_trailing_institution_stripped_from_a_single_title_too():
     items = [{
         "section": "job_title",

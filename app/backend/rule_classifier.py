@@ -2731,7 +2731,11 @@ ADMIN_TITLE_CONNECTOR_RE = re.compile(
 TRAILING_INSTITUTION_RE = re.compile(
     r",\s*[A-Z][\w.&'-]*(?:\s+[\w.&'-]+){0,6}\s+"
     r"(?:University|College|Institute|Institution|Academy|Polytechnic|School)"
-    r"(?:\s*,\s*[A-Z][\w.&'-]*(?:\s+[\w.&'-]+){0,3}(?:\s+Campus)?)?"
+    # The trailing campus/city name is commonly NOT its own comma-separated
+    # fragment -- "Middlesex University Dubai" and "Middlesex University,
+    # Dubai Campus" are both real forms seen live, so the comma before it
+    # has to be optional, not required.
+    r"(?:\s*,?\s*[A-Z][\w.&'-]*(?:\s+[\w.&'-]+){0,3}(?:\s+Campus)?)?"
     r"\s*$"
 )
 
