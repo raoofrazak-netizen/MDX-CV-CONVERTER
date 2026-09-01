@@ -12,9 +12,11 @@ import profiles
 import storage
 import template_engine
 import validation
+from ai.ollama_client import OllamaProvider, validate_segments
+from ai.two_stage import run_two_stage_analysis
 from config import (
-    ALLOWED_EXTENSIONS, FRONTEND_DIR, GENERATED_DIR, MAX_UPLOAD_MB, PHOTOS_DIR, SECTION_KEYS, SECTIONS,
-    UPLOADS_DIR,
+    AI_PROVIDER, ALLOWED_EXTENSIONS, FRONTEND_DIR, GENERATED_DIR, MAX_UPLOAD_MB, PHOTOS_DIR, SECTION_KEYS,
+    SECTIONS, UPLOADS_DIR,
 )
 from extraction import ExtractionError, blocks_to_plain_text, extract
 from formatting import format_item
@@ -184,6 +186,18 @@ def unmapped_headings_summary():
     return insights.summarize_unmapped_headings(rows, taught)
 
 
+@app.get("/api/heading-mapping-suggestions")
+def heading_mapping_suggestions():
+    """Build spec §14: "use HR corrections as structured knowledge." Every
+    entry here is a real pattern in what HR has already, individually,
+    corrected -- never a mapping written automatically. Saving one still
+    goes through the existing POST /api/heading-mappings (§5g) with HR's
+    explicit click; this endpoint only surfaces the candidates."""
+    rows = storage.list_resolved_formerly_unmapped_items()
+    taught = {m["heading_text"].casefold() for m in storage.list_heading_mappings()}
+    return insights.suggest_heading_mappings(rows, taught)
+
+
 @app.get("/api/settings/auto-approval-threshold")
 def get_auto_approval_threshold():
     return {"threshold": validation.auto_approve_threshold()}
@@ -319,6 +333,216 @@ def patch_item(item_id: str, patch: ItemPatch):
     storage.update_item(item_id, **updates)
     storage.log_event(item["cv_id"], "item_updated", detail=f"{item_id}: {list(updates.keys())}")
     return storage.get_item(item_id)
+
+
+# Sections an "Analyze with AI" suggestion may recommend: the 20 official
+# MDX sections plus Skills/Language Proficiency, minus the letterhead fields
+# (name/title/contact/email/photo) -- the same set the review screen's own
+# "move to section" dropdown already offers, so AI can never suggest a
+# destination a human reviewer couldn't also pick by hand.
+_AI_VALID_SECTIONS = [
+    {"key": s["key"], "label": s["label"]} for s in SECTIONS
+    if s["heading_text"] or s["key"] in ("skills", "language_proficiency")
+]
+
+
+def _get_ai_provider():
+    if AI_PROVIDER == "ollama":
+        return OllamaProvider()
+    return None
+
+
+def _section_label(key: str) -> str:
+    return next((s["label"] for s in SECTIONS if s["key"] == key), key)
+
+
+@app.post("/api/items/{item_id}/analyze-with-ai")
+def analyze_item_with_ai(item_id: str, two_stage: bool = False):
+    """Ask the configured local AI provider where this one item belongs.
+    Read-only: never changes the item itself. A reviewer who agrees with
+    the suggestion applies it via the existing PATCH /api/items/{id}
+    endpoint, same as any other manual move -- this endpoint only ever
+    returns an opinion, it never acts on it.
+
+    `two_stage=true` adds an independent second AI pass that reviews the
+    first pass's proposal before it's shown as trustworthy (build spec
+    §11) -- roughly double the latency of the default single-pass call, so
+    it's opt-in per request rather than always-on. The single-pass
+    response shape below is unchanged either way; two-stage only adds
+    fields, so an existing caller that ignores the new fields keeps
+    working exactly as before.
+    """
+    item = storage.get_item(item_id)
+    if not item:
+        raise _user_error("Item not found.", 404)
+
+    provider = _get_ai_provider()
+    if provider is None or not provider.is_available():
+        raise _user_error(
+            "AI analysis is not configured on this server. Set AI_PROVIDER=ollama to enable it.", 503,
+        )
+
+    source_text = item["source"]["raw_text"]
+
+    if two_stage:
+        result = run_two_stage_analysis(
+            provider, source_text=source_text, current_section=item["section"],
+            original_heading=_section_label(item["section"]), valid_sections=_AI_VALID_SECTIONS,
+        )
+        if result is None:
+            storage.log_event(item["cv_id"], "ai_analysis_unavailable", detail=item_id)
+            raise _user_error(
+                "AI is unavailable right now (not running, or it didn't return a usable answer). "
+                "The item is unchanged.", 503,
+            )
+        storage.log_event(
+            item["cv_id"], "ai_analysis_two_stage_requested",
+            detail=(
+                f"{item_id}: pass1={result.pass1.status}->{result.pass1.section} "
+                f"pass2={result.pass2.verdict if result.pass2 else 'skipped'} "
+                f"final={result.final_status}->{result.final_section} ({result.final_confidence:.2f})"
+            ),
+        )
+        return {
+            "status": result.final_status,
+            "section": result.final_section,
+            "section_label": _section_label(result.final_section) if result.final_section else None,
+            "confidence": result.final_confidence,
+            "reasoning": result.note,
+            "two_stage": {
+                "pass1": {
+                    "status": result.pass1.status, "section": result.pass1.section,
+                    "section_label": _section_label(result.pass1.section) if result.pass1.section else None,
+                    "confidence": result.pass1.confidence, "reasoning": result.pass1.reasoning,
+                },
+                "pass2": {
+                    "verdict": result.pass2.verdict, "section": result.pass2.section,
+                    "section_label": _section_label(result.pass2.section) if result.pass2.section else None,
+                    "confidence": result.pass2.confidence, "reasoning": result.pass2.reasoning,
+                } if result.pass2 else None,
+            },
+        }
+
+    suggestion = provider.analyze_content(
+        source_text=source_text, current_section=item["section"], valid_sections=_AI_VALID_SECTIONS,
+    )
+    if suggestion is None:
+        storage.log_event(item["cv_id"], "ai_analysis_unavailable", detail=item_id)
+        raise _user_error(
+            "AI is unavailable right now (not running, or it didn't return a usable answer). "
+            "The item is unchanged.", 503,
+        )
+
+    storage.log_event(
+        item["cv_id"], "ai_analysis_requested",
+        detail=f"{item_id}: {suggestion.status} -> {suggestion.section} ({suggestion.confidence:.2f})",
+    )
+    return {
+        "status": suggestion.status,
+        "section": suggestion.section,
+        "section_label": next(
+            (s["label"] for s in _AI_VALID_SECTIONS if s["key"] == suggestion.section), None,
+        ),
+        "confidence": suggestion.confidence,
+        "reasoning": suggestion.reasoning,
+    }
+
+
+@app.post("/api/items/{item_id}/segment-with-ai")
+def segment_item_with_ai(item_id: str):
+    """Ask whether one item is actually several distinct facts filed
+    together, and if so, where each piece belongs -- build spec §9.
+    Read-only, exactly like analyze-with-ai: this only ever returns a
+    proposed split for HR to look at. Nothing is created or deleted until
+    accept-ai-segments is called with an explicit HR decision."""
+    item = storage.get_item(item_id)
+    if not item:
+        raise _user_error("Item not found.", 404)
+
+    provider = _get_ai_provider()
+    if provider is None or not provider.is_available():
+        raise _user_error(
+            "AI analysis is not configured on this server. Set AI_PROVIDER=ollama to enable it.", 503,
+        )
+
+    segmentation = provider.segment_content(
+        source_text=item["source"]["raw_text"], current_section=item["section"],
+        valid_sections=_AI_VALID_SECTIONS,
+    )
+    if segmentation is None:
+        storage.log_event(item["cv_id"], "ai_segmentation_unavailable", detail=item_id)
+        raise _user_error(
+            "AI is unavailable, or its proposed split didn't pass the verbatim/coverage check. "
+            "The item is unchanged.", 503,
+        )
+
+    storage.log_event(
+        item["cv_id"], "ai_segmentation_requested",
+        detail=f"{item_id}: {segmentation.status} ({len(segmentation.segments)} segments)",
+    )
+    return {
+        "status": segmentation.status,
+        "segments": [
+            {"text": s.text, "section": s.section, "section_label": _section_label(s.section)}
+            for s in segmentation.segments
+        ],
+        "reasoning": segmentation.reasoning,
+    }
+
+
+@app.post("/api/items/{item_id}/accept-ai-segments")
+def accept_ai_segments(item_id: str, payload: dict):
+    """Apply an AI-proposed split HR has explicitly accepted: creates one
+    new item per segment and removes the original. Re-validates the
+    submitted segments against the item's own CURRENT source text fetched
+    fresh from the database -- never trusts the client's echo of what it
+    was shown, which is what actually enforces the verbatim/zero-loss
+    guarantee (see ai/ollama_client.py's validate_segments). All-or-
+    nothing: if validation fails, nothing is created and the original item
+    is untouched."""
+    item = storage.get_item(item_id)
+    if not item:
+        raise _user_error("Item not found.", 404)
+
+    submitted = payload.get("segments")
+    if not isinstance(submitted, list) or len(submitted) < 2:
+        raise _user_error("At least two segments are required.")
+
+    verified = validate_segments(submitted, item["source"]["raw_text"], _AI_VALID_SECTIONS)
+    if verified is None:
+        raise _user_error(
+            "These segments no longer match the item's source text exactly (or don't fully "
+            "account for it), so nothing was changed. Try analyzing again.", 409,
+        )
+
+    new_items = []
+    for seg in verified:
+        new_item = {
+            "item_id": str(uuid.uuid4()),
+            "cv_id": item["cv_id"],
+            "section": seg.section,
+            "fields": {},
+            "source": {
+                "document": item["source"].get("document", ""), "raw_text": seg.text,
+                "page": item["source"].get("page"), "char_offset": item["source"].get("char_offset"),
+            },
+            "confidence": 0.5,
+            "confidence_band": validation.confidence_band(0.5),
+            "validation_flags": ["ai_segmented"],
+            "status": "pending_review",
+            "edit_history": [{
+                "at": now_iso(), "action": "ai_segmented_from", "previous_fields": {"source_item_id": item_id},
+            }],
+        }
+        storage.insert_item(new_item)
+        new_items.append(new_item)
+
+    storage.delete_item(item_id)
+    storage.log_event(
+        item["cv_id"], "ai_segments_accepted",
+        detail=f"{item_id} split into {len(new_items)} items: {[i['item_id'] for i in new_items]}",
+    )
+    return {"deleted_item_id": item_id, "new_items": new_items}
 
 
 @app.post("/api/cv/{cv_id}/command")

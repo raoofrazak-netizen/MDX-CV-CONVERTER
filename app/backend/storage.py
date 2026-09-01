@@ -352,6 +352,26 @@ def list_unmapped_items_with_cv() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def list_resolved_formerly_unmapped_items() -> list[dict]:
+    """Items that started in the unmapped safety net -- unmapped.py stamps
+    a "context" key (the source heading text) into every item it creates,
+    and nothing else in the codebase writes that key -- and have SINCE
+    been moved to a real section, whether by a manual move or an accepted
+    AI suggestion (both go through the same PATCH endpoint and leave
+    `fields` otherwise untouched). Raw material for build spec §14: an
+    actual correction HR already made, not a guess about one. The `LIKE`
+    clause is a cheap pre-filter only; the real check (a genuine JSON
+    "context" key, not a coincidental substring) happens in Python once
+    fields is decoded, same division of labour as
+    list_unmapped_items_with_cv() above."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT cv_id, section, fields FROM items "
+            "WHERE section != 'unmapped' AND fields LIKE '%\"context\"%'"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def _row_to_item(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     d["fields"] = json.loads(d["fields"])

@@ -1003,6 +1003,14 @@ SKILL_CATEGORY_RE = re.compile(
 )
 MIN_SKILL_CATEGORY_LETTERS = 6
 
+# A full job-duty sentence ("Coordinated and streamlined hospital
+# services..."): opens with a Title-Case gerund/past-tense verb and ends in
+# real sentence punctuation. Shape-based rather than a fixed verb list --
+# it only needs to recognise "this is a sentence", not classify which duty
+# it describes; routing.py's ACTION_VERB_RE (a fixed vocabulary) is the one
+# that decides where a re-routed item like this ends up.
+JOB_DUTY_SENTENCE_RE = re.compile(r"^[A-Z][a-z]+(?:ing|ed)\b.*[.!?]$")
+
 # The tail half of a scrambled employment-entry header ("Didier Sachs / Los
 # Santos, CA / 2008-2011") when it has landed on its own physical line,
 # split away from the bare job title above it ("SALESMAN") by the
@@ -1130,6 +1138,19 @@ def _group_into_items(body_lines: list[str], section_key: str | None = None) -> 
                 and text[:1].isupper()
                 and not EMPLOYER_LOCATION_YEAR_TAIL_RE.match(text)
             )
+            # A "LANGUAGES" heading with no bullet glyphs extracts its real
+            # content as one short, unpunctuated line ("English Malayalam").
+            # Under sentence-boundary grouping that line never ends in
+            # punctuation, so without this the very next line -- however
+            # unrelated -- welds onto it: a two-column template's job-duty
+            # text box, whose reading-order position happens to land right
+            # after the language list, produced "English Malayalam
+            # Coordinated and streamlined hospital services...". A line
+            # shaped like a full descriptive sentence (opens with a
+            # Title-Case gerund/past-tense verb, ends in real punctuation)
+            # is never itself part of a language list, so it always starts
+            # a new item here regardless of what the previous line ended in.
+            or (section_key == "language_proficiency" and JOB_DUTY_SENTENCE_RE.match(text))
         ):
             starts_new = True
 
@@ -1329,6 +1350,52 @@ def _is_whole_line_letter_spaced(line: str) -> bool:
 
 def _collapse_letter_spaced(line: str) -> str:
     return "".join(line.split())
+
+
+def _is_name_shaped_letter_spacing(line: str) -> bool:
+    """Like _is_whole_line_letter_spaced, but tolerant of a trailing
+    decorative punctuation mark ("D E V A P R A B H A A ." for a
+    letter-spaced name followed by a full stop) that the heading check
+    correctly treats as disqualifying -- a heading is never punctuated like
+    that, but a name-plate flourish routinely is."""
+    tokens = line.split()
+    while tokens and len(tokens[-1]) == 1 and not tokens[-1].isalpha():
+        tokens = tokens[:-1]
+    return len(tokens) >= _LETTER_SPACED_LINE_RUN_MIN and all(
+        len(t) == 1 and t.isalpha() for t in tokens
+    )
+
+
+def _looks_like_collapsed_name(text: str) -> bool:
+    """A relaxed shape check used only for a candidate recovered by
+    collapsing letter-spacing (see _collapse_letter_spaced_name). Unlike an
+    ordinary candidate, this one is by construction always a single run
+    with no recoverable word boundaries -- NAME_LINE_RE's multi-word
+    requirement (the guard _looks_like_person_name relies on) can never be
+    satisfied by it and isn't a meaningful signal here. Still guarded by
+    the same heading/blocklist checks that protect the ordinary path."""
+    if not text or len(text) > 40 or not text.isalpha():
+        return False
+    if _find_heading_key(text) is not None:
+        return False
+    if _normalize_heading(text) in NAME_BLOCKLIST:
+        return False
+    return text.isupper()
+
+
+def _collapse_letter_spaced_name(line: str) -> str | None:
+    """Collapse a letter-spaced name-plate line ("D E V A P R A B H A A .")
+    to its plain form ("DEVAPRABHAA"), or None if the line isn't shaped like
+    one. Unlike heading collapsing there's no known-word list to recover
+    multi-word boundaries from, so this only ever produces a single run --
+    good enough to make an otherwise name-shaped line visible to the
+    ordinary shape-based candidate check, not a full name parser."""
+    if not _is_name_shaped_letter_spacing(line):
+        return None
+    tokens = line.split()
+    while tokens and len(tokens[-1]) == 1 and not tokens[-1].isalpha():
+        tokens = tokens[:-1]
+    return "".join(tokens)
 
 
 def _exact_heading_key(normalized: str) -> str | None:
@@ -1740,6 +1807,11 @@ def _extract_letterhead(
     # first in the document" -- with the preamble kept only as a fallback
     # for CVs where no email/phone was found at all.
     candidates: list[str] = []
+    # Maps a candidate that was DERIVED (rather than quoted as-is) back to
+    # the real line it came from, so source_text can still point at the
+    # true verbatim quote even when the candidate used for matching isn't
+    # it -- same idea as the existing email-derived-name handling below.
+    candidate_source: dict[str, str] = {}
 
     def _add_candidate(line: str) -> None:
         if line not in candidates:
@@ -1751,6 +1823,16 @@ def _extract_letterhead(
         for segment in _letterhead_segments(line):
             if segment and segment not in candidates:
                 candidates.append(segment)
+        # A name a template letter-spaces for visual effect
+        # ("D E V A P R A B H A A .") extracts as a run of single-letter
+        # tokens no shape check can recognise as a name -- the same
+        # rendering artifact _merge_split_letter_spaced_headings already
+        # normalises for section headings, just not caught there because a
+        # name-plate line is never itself a recognised heading.
+        collapsed = _collapse_letter_spaced_name(line)
+        if collapsed and collapsed not in candidates:
+            candidates.append(collapsed)
+            candidate_source[collapsed] = line
 
     for anchor_idx in (email_line_idx, phone_line_idx):
         for line in _anchor_window(lines, anchor_idx):
@@ -1791,7 +1873,9 @@ def _extract_letterhead(
     if not name_line:
         shape_name = next(
             ((line.strip(), 0.75 if line in preamble else 0.8)
-             for line in candidates if _looks_like_person_name(line)),
+             for line in candidates
+             if _looks_like_person_name(line)
+             or (line in candidate_source and _looks_like_collapsed_name(line))),
             None,
         )
         if shape_name and (not email_name or _names_agree(shape_name[0], email_name)):
@@ -1803,13 +1887,14 @@ def _extract_letterhead(
         elif shape_name:
             name_line, confidence = shape_name
 
-    # A name derived from an address is not a quote from the CV, so its
-    # source is the address line it came from -- keeping the "every item
-    # traces back to real text" guarantee intact.
+    # A name derived from an address, or collapsed from letter-spacing, is
+    # not a quote from the CV in that exact form, so its source is the real
+    # line it came from -- keeping the "every item traces back to real
+    # text" guarantee intact even when `value` itself is a cleaned-up form.
     if name_line and name_line == email_name:
         name_source = next((l.strip() for l in lines if EMAIL_RE.search(l)), name_line)
     else:
-        name_source = name_line
+        name_source = candidate_source.get(name_line, name_line)
 
     if name_line:
         items.append({
@@ -2614,6 +2699,85 @@ def _publication_subgroup(line: str) -> str | None:
 
 LETTERHEAD_SECTIONS = {"full_name", "job_title", "contact_info", "email"}
 
+# Two real, separate posts glued into one CV line by a coordinating "and"
+# ("Senior Lecturer, International and Comparative Education, and Head of
+# Centre for Academic Success, Middlesex University, Dubai Campus"). The
+# template's own instructions ask for these as separate title lines ("List
+# each title individually... Administrative titles should follow the
+# format 'Title, Centre or Institute Name.'"), but nothing upstream ever
+# split the source line apart.
+#
+# Narrow, curated list of real academic/administrative leadership titles --
+# deliberately not a bare "\band\b" split, which would just as happily
+# break "International and Comparative Education" (a department name, not
+# a second post) in the middle.
+ADMIN_TITLE_CONNECTOR_RE = re.compile(
+    r",?\s+and\s+((?:Head|Director|Dean|Chair|Provost|Vice[- ]Provost"
+    r"|Vice[- ]Chancellor|Pro[- ]Vice[- ]Chancellor|Assistant Dean"
+    r"|Associate Dean|Convenor|Coordinator)\s+of\b.*)$",
+    re.I,
+)
+
+# A job title line commonly ends with the institution -- and, at a branch
+# campus, the named campus too -- the person holds it at ("...Head of
+# Centre for Academic Success, Middlesex University, Dubai Campus"). That
+# tail reads as an address fragment glued onto the title, not part of it,
+# and Present Employment already states the employer in full -- keeping it
+# here is redundant as well as visually wrong (real feedback: "job title
+# shows as an address"). Stripped only from the END of the line, and only
+# when it resolves to a real institution keyword, so a genuine department
+# name with no institution word in it ("International and Comparative
+# Education") is never touched.
+TRAILING_INSTITUTION_RE = re.compile(
+    r",\s*[A-Z][\w.&'-]*(?:\s+[\w.&'-]+){0,6}\s+"
+    r"(?:University|College|Institute|Institution|Academy|Polytechnic|School)"
+    r"(?:\s*,\s*[A-Z][\w.&'-]*(?:\s+[\w.&'-]+){0,3}(?:\s+Campus)?)?"
+    r"\s*$"
+)
+
+
+def _strip_trailing_institution(text: str) -> str:
+    return TRAILING_INSTITUTION_RE.sub("", text).strip()
+
+
+def _clean_job_titles(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Clean up a job_title value: split two real posts glued together by a
+    coordinating "and" into two lines (joined by "\\n" -- template_engine
+    renders each as its own paragraph under the same "Job title:" field,
+    matching how a multi-line formatter result is already handled for body
+    content), and strip a trailing institution/campus tail from each
+    resulting line. Both changes are flagged at reduced confidence for
+    review rather than presented as clean and certain, since the split
+    point and the institution boundary -- while strong, curated signals --
+    are still judgement calls about where a title actually ends.
+    """
+    for item in items:
+        if item["section"] != "job_title":
+            continue
+        value = item["fields"].get("value", "")
+        if not isinstance(value, str) or "\n" in value:
+            continue
+        match = ADMIN_TITLE_CONNECTOR_RE.search(value)
+        if match:
+            first = _strip_trailing_institution(value[:match.start()].rstrip(" ,"))
+            second = _strip_trailing_institution(match.group(1).strip())
+            if not (first and second):
+                continue
+            item["fields"]["value"] = f"{first}\n{second}"
+            item["confidence"] = min(item.get("confidence", 0.7), 0.65)
+            item["validation_flags"] = sorted(
+                set(item.get("validation_flags", [])) | {"multi_title_split"}
+            )
+        else:
+            stripped = _strip_trailing_institution(value)
+            if stripped and stripped != value:
+                item["fields"]["value"] = stripped
+                item["confidence"] = min(item.get("confidence", 0.7), 0.65)
+                item["validation_flags"] = sorted(
+                    set(item.get("validation_flags", [])) | {"institution_stripped_from_title"}
+                )
+    return items
+
 
 def _drop_name_echoes(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Remove body items that are nothing but the person's own name.
@@ -3170,6 +3334,7 @@ def classify_rule_based(cv_text: str, source_document: str) -> list[dict[str, An
     items = routing.apply_routing(items, authoritative)
     items = _reclassify_resume_crosstalk(items)
     items = _promote_present_role(items)
+    items = _clean_job_titles(items)
 
     if not any(it["section"] == "job_title" for it in items):
         for target_section in ("present_employment", "previous_employment"):
@@ -3186,5 +3351,6 @@ def classify_rule_based(cv_text: str, source_document: str) -> list[dict[str, An
             else:
                 continue
             break
+        items = _clean_job_titles(items)
 
     return items

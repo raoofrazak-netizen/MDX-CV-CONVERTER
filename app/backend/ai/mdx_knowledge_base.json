@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "sections": {
+    "full_name": {
+      "description": "The person's own full name, as a letterhead field -- not a section of ordinary CV content.",
+      "examples": ["Dr Camilla Hadi Chaudhary"],
+      "include": ["The candidate's own name, only if content genuinely needs correcting to be the name field."],
+      "exclude": ["Any regular CV content -- this is almost never a correct destination outside of fixing a misextracted name."],
+      "related_sections": []
+    },
+    "biography": {
+      "description": "A short written paragraph describing who the person is professionally -- their role, expertise, and research/teaching focus in prose, not bullet facts.",
+      "examples": [
+        "Dr Camilla holds a PhD in Education from the University of Cambridge and researches educational inclusion and equity.",
+        "Marketing Manager with 9+ years of experience across agencies and in-house roles."
+      ],
+      "include": ["A self-description paragraph already written in the CV (a 'Profile'/'Objective'/'Summary' section)."],
+      "exclude": [
+        "A bare skill or trait with no sentence around it (\"Fluent in English.\") -- too short to be a biography.",
+        "A single fact like a degree title with no narrative -- belongs in Qualifications instead."
+      ],
+      "related_sections": ["qualifications"]
+    },
+    "qualifications": {
+      "description": "Academic degrees, professional certifications, and formal education -- what the person studied, where, and when.",
+      "examples": [
+        "Doctor of Philosophy (PhD) in Education, University of Cambridge, United Kingdom",
+        "Google Analytics Certified",
+        "Bachelor of Engineering, Electronics and Communication Engineering"
+      ],
+      "include": ["Degrees, diplomas, certifications, formal training courses with a credential."],
+      "exclude": [
+        "A short course or training that isn't a credential and reads more like a skill -- consider Skills instead.",
+        "Membership of a professional body -- that belongs in Professional Association Memberships instead."
+      ],
+      "related_sections": ["skills", "associations"]
+    },
+    "associations": {
+      "description": "Membership in professional bodies, societies, and fellowships -- being a member/fellow of an organisation, not a role performed for it.",
+      "examples": [
+        "Member, British Association of International and Comparative Education (BAICE)",
+        "Fellow, Higher Education Academy"
+      ],
+      "include": ["Membership status in a named professional body or society."],
+      "exclude": ["An active role performed within a body (chairing a committee, editing its journal) -- those belong under Committees or Editorial Roles instead, since the fact being reported is the role, not the membership."],
+      "related_sections": ["committees", "editorial_roles"]
+    },
+    "present_employment": {
+      "description": "The person's current job at Middlesex University -- a role with no stated end date, at MDX specifically.",
+      "examples": ["Senior Lecturer, International and Comparative Education, Middlesex University Dubai (2023 - Present)"],
+      "include": ["A current, ongoing role specifically at Middlesex University."],
+      "exclude": ["A current role at any OTHER employer -- that is Previous Employment even if it is still ongoing, since this section is MDX-specific."],
+      "related_sections": ["previous_employment"]
+    },
+    "previous_employment": {
+      "description": "Any past role, including a past MDX role that has ended, and any role -- past or present -- at an employer other than Middlesex University.",
+      "examples": [
+        "Marketing Manager, Byezzy Tech, Dubai, UAE (2023 - 2025)",
+        "Consultant, Oxford Policy Management, Oxford, United Kingdom (2024 - 2026)"
+      ],
+      "include": ["Job title, employer, and dates for any past or non-MDX role."],
+      "exclude": ["A CURRENT role at Middlesex University specifically -- that belongs in Present Employment instead."],
+      "related_sections": ["present_employment"]
+    },
+    "teaching_learning": {
+      "description": "Teaching responsibilities, module leadership, curriculum development, and student supervision -- the act of teaching or building teaching materials.",
+      "examples": [
+        "Taught undergraduate and postgraduate courses in comparative education.",
+        "Developed curriculum for a new module on inclusive education.",
+        "Supervised five PhD students to completion."
+      ],
+      "include": ["Direct teaching, module/curriculum design, and supervising students."],
+      "exclude": ["A research publication about teaching methods -- that belongs in Publications, not Teaching, since the fact being reported is a publication, not a teaching activity."],
+      "related_sections": ["knowledge_exchange"]
+    },
+    "committees": {
+      "description": "Membership on an internal or external committee, advisory group, working group, task force, or board -- a governance or advisory seat, not an editorial or academic-leadership one.",
+      "examples": [
+        "Member, Advisory Group, Parliamentarians Caucus",
+        "Member, Faculty Research Ethics Committee"
+      ],
+      "include": ["Sitting on a named committee, advisory board, working group, or task force."],
+      "exclude": [
+        "Founding or leading an initiative -- that is Academic Leadership, which outranks a plain committee seat.",
+        "Reviewing or editing for a journal -- that is Editorial Roles."
+      ],
+      "related_sections": ["academic_leadership", "editorial_roles"]
+    },
+    "academic_leadership": {
+      "description": "Founding, directing, or leading an academic initiative, network, programme, or executive-level role -- leadership specifically, not ordinary committee membership.",
+      "examples": [
+        "Co-founder and Convenor, SAARE Network",
+        "Head of Centre for Academic Success",
+        "Member, Executive Committee, BAICE"
+      ],
+      "include": ["Founding/directing/leading a group, programme, network, or serving on an EXECUTIVE committee/board (as opposed to an ordinary advisory one)."],
+      "exclude": ["An ordinary (non-executive) committee seat with no leadership component -- that is Committees instead."],
+      "related_sections": ["committees"]
+    },
+    "knowledge_exchange": {
+      "description": "Public engagement and professional-practice activity outside teaching and formal committee work -- running or speaking at events, outreach, media appearances.",
+      "examples": [
+        "Co-convenor, CASES Seminar Series",
+        "Keynote speaker, International Conference on Education Policy",
+        "Participant, Mukalma TV programme"
+      ],
+      "include": ["Organising or speaking at seminars/workshops/conferences run as outreach, public talks, media appearances, community/industry engagement."],
+      "exclude": ["A conference PAPER or presentation that is a research output -- that belongs in Publications (this template files conference papers as research outputs, not as knowledge exchange)."],
+      "related_sections": ["publications", "teaching_learning"]
+    },
+    "awards": {
+      "description": "Prizes, honours, scholarships, and formal recognitions received by the person.",
+      "examples": ["Recipient of the Top 6% of Nevada Sales Award, 2015", "Dean's List, 2019"],
+      "include": ["A named prize, honour, scholarship, or formal recognition."],
+      "exclude": ["A certification or credential -- those belong in Qualifications even if they sound prestigious."],
+      "related_sections": ["qualifications"]
+    },
+    "centres_of_excellence": {
+      "description": "The person's contribution to a named MDX centre of excellence or research lab -- affiliation with or contribution to such a centre specifically.",
+      "examples": ["Member, Centre for Academic Success, Middlesex University Dubai"],
+      "include": ["Named contribution to or role within a specific research centre or lab at Middlesex University."],
+      "exclude": ["A generic research group not branded as an MDX centre -- consider Academic Leadership or Previous/Present Employment instead depending on context."],
+      "related_sections": ["academic_leadership"]
+    },
+    "grants": {
+      "description": "Research funding, grants received, and consultancy projects -- money awarded for research or paid consultancy work performed.",
+      "examples": [
+        "Received a research grant from the national council, 2024-2026.",
+        "Consultant, Oxford Policy Management -- FCDO-funded research consortium."
+      ],
+      "include": ["A funded research project, grant received, or consultancy engagement with a named funder or client."],
+      "exclude": ["An unfunded research project with no grant or client attached -- that is more likely Publications or Knowledge Exchange depending on its nature."],
+      "related_sections": ["publications"]
+    },
+    "editorial_roles": {
+      "description": "Editorial, peer-review, and examiner roles for journals or publications -- being an editor, editorial board member, reviewer, or external examiner.",
+      "examples": [
+        "Associate Editor, Cambridge Journal of Education",
+        "Reviewer, Comparative Education Review",
+        "External Examiner, MPhil in Architecture"
+      ],
+      "include": ["Any editor/editorial-board/reviewer/external-examiner role for a journal, publisher, or degree programme."],
+      "exclude": ["Membership of the journal's parent professional body with no editorial role -- that is Professional Association Memberships instead."],
+      "related_sections": ["associations", "publications"]
+    },
+    "publications": {
+      "description": "The person's own research outputs -- journal articles, books, book chapters, conference papers and presentations, and (for creative/design disciplines) exhibited practice outputs.",
+      "examples": [
+        "Chaudhary, C. (2024). Educational inclusion and equity. Cambridge Journal of Education.",
+        "Keynote paper presented at the International Conference on Comparative Education, 2025.",
+        "Selected Practice Outputs: solo exhibition, Dubai Design Week, 2024."
+      ],
+      "include": ["Journal articles, books, book chapters, conference papers/presentations, media/blog research outputs, and creative/practice-based research outputs."],
+      "exclude": ["A talk given as public outreach with no research-output character -- that is Knowledge Exchange instead."],
+      "related_sections": ["knowledge_exchange", "grants"]
+    },
+    "profiles_links": {
+      "description": "Scholarly identifiers and professional profile links -- ORCID, Scopus, Google Scholar, LinkedIn, ResearchGate, personal/centre websites.",
+      "examples": ["ORCID: 0000-0002-1234-5678", "LinkedIn: linkedin.com/in/example"],
+      "include": ["A named identifier or URL to a professional/scholarly profile."],
+      "exclude": ["A citation or publication URL that is really a research output -- that belongs in Publications, not here."],
+      "related_sections": []
+    },
+    "skills": {
+      "description": "Not one of the 20 official MDX sections, but a real, labelled section for technical or soft skills -- tools, software, and competencies, stated as a short phrase, not a sentence.",
+      "examples": ["Performance marketing", "Zoho CRM", "Team leadership"],
+      "include": ["A short skill, tool, or competency phrase."],
+      "exclude": ["A full sentence describing an accomplishment or responsibility -- that is a job responsibility and belongs in Previous/Present Employment instead."],
+      "related_sections": ["qualifications"]
+    },
+    "language_proficiency": {
+      "description": "Not one of the 20 official MDX sections, but a real, labelled section for languages the person speaks.",
+      "examples": ["English", "Malayalam (native)"],
+      "include": ["A named language, optionally with a proficiency level."],
+      "exclude": ["Anything that isn't a language name."],
+      "related_sections": []
+    }
+  }
+}

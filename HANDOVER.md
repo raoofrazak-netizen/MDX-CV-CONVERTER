@@ -234,11 +234,12 @@ invariants that must hold for **any** CV, whatever its layout or wording:
   from non-adjacent source lines and silently discarded; that is a grouping
   bug, not a reason to relax the guard (§5f)
 
-The corpus currently holds **25 CVs** — a mix of academic MDX-format CVs,
-plain-language résumés, and converted/vendor-template files — plus two files
-that are deliberately expected to be *refused* (damaged embedded fonts; see
-§5f), which the harness checks produce a clear, human-readable message rather
-than counting as a failure.
+The corpus currently holds **35 CVs** — a mix of academic MDX-format CVs,
+plain-language résumés, and converted/vendor-template files. **33 pass.** The
+2 failures are expected and permanent: both are blank vendor sample
+templates with literal placeholder text ("NAME", "youremail@gmail.com") and
+no real person in them — "no full name found" is correct behaviour on a file
+with no name to find, not a bug.
 
 **Why it exists:** every fix to this pipeline was previously prompted by a
 single CV failing, and fixing that one file in isolation is exactly how the
@@ -383,6 +384,171 @@ next, ahead of the built-in fuzzy/contained-phrase guesses.
 
 ---
 
+## 5h. Optional local AI assistance (Ollama)
+
+Everything above this section is the deterministic rule engine, which is
+**always** the first pass and remains fully functional with zero
+configuration. This section adds an entirely optional, opt-in local AI
+layer on top of it, built against a separate specification
+(`MDX FACULTY CV CONVERTER — LOCAL AI INTELLIGENCE INTEGRATION BUILD
+SPECIFICATION.md`). It never runs automatically, never replaces the rule
+engine, and the app is byte-for-byte identical in behaviour when it's off
+(the default).
+
+**Enabling it:** set `AI_PROVIDER=ollama` when starting the server (plus
+having [Ollama](https://ollama.com) installed and a model pulled, e.g.
+`ollama pull llama3.2`). `AI_PROVIDER=none` (the default) disables it
+entirely — no code path even attempts to reach Ollama.
+
+### What it does
+
+Three opt-in actions appear on the review screen, only on items the rule
+engine was already uncertain about (unmapped, or below high confidence) —
+a rule-confident item gets no AI button at all:
+
+- **"Analyze with AI"** — one AI pass suggests a single MDX section for an
+  item. Read-only until the reviewer clicks Accept; Accept reuses the
+  existing item-move endpoint, so an AI-assisted move is stored and
+  audited exactly like a manual one.
+- **"Verify with second AI pass"** (appears after a first-pass suggestion)
+  — an independent second AI pass reviews the first pass's proposal
+  (build spec §11). The two passes agreeing produces a *calculated*
+  confidence (multiplied, not copied from either pass, nudged by whether
+  the rule engine had already filed the item there too); the two passes
+  genuinely disagreeing on different sections always surfaces to the
+  reviewer, never resolved automatically.
+- **"Split with AI"** (appears only on longer items) — proposes splitting
+  one item that reads as several distinct facts into multiple correctly-
+  sectioned items (build spec §9, e.g. a paragraph mixing a job title,
+  teaching duties, a publication, and a grant). All-or-nothing: every
+  proposed segment must be an exact verbatim substring of the original
+  text, and the segments together must fully reconstruct it — any content
+  loss or fabricated text rejects the whole split, not just the bad piece.
+
+### The MDX knowledge base (build spec §15)
+
+`ai/mdx_knowledge_base.json` gives the AI real per-section context —
+description, a worked example, and what NOT to file there — instead of a
+bare list of section names. Heading synonyms are **not** duplicated by
+hand in this file: they're merged in at load time from
+`rule_classifier.SYNONYM_HEADINGS` (the same vocabulary the deterministic
+classifier already uses), so the two can never silently drift apart. A
+regression test (`test_ai_knowledge_base.py`) asserts this every run.
+
+Measured effect: on a real "CERTIFICATIONS ... Google Digital Garage"
+line, the AI misfiled it under Awards without this context and correctly
+files it under Qualifications with it — the enrichment is a real accuracy
+improvement, not just more prompt text.
+
+### Real bugs this surfaced (all fixed, all now regression-tested)
+
+Built incrementally with live testing against a real local model
+(llama3.2) at every step, not just mocked logic — which is exactly what
+caught these:
+
+- A "CHANGE" verdict from the second AI pass sometimes named the *same*
+  section the first pass already proposed (a real model inconsistency,
+  reasoning against a section but naming it anyway). Fixed to combine as
+  agreement while still showing the raw, slightly-contradictory verdict to
+  the reviewer for transparency (`ai/two_stage.py`).
+- Enriching prompts with the knowledge base's human-readable labels made
+  the model start echoing a label's casing ("Qualifications") instead of
+  the machine key ("qualifications") — an accurate answer the original
+  exact-match check rejected as unusable. Fixed with case-insensitive
+  resolution against both key and label, still refusing anything outside
+  the controlled vocabulary (`_resolve_section_key`).
+- The richer prompts pushed real inference time past the original 60s
+  timeout; raised to 120s (matching the build spec's own example config)
+  after measuring actual worst-case latency rather than guessing.
+
+### Where it lives
+
+| Path | What it is |
+|---|---|
+| `app/backend/ai/provider.py` | Provider-agnostic interface + result types |
+| `app/backend/ai/ollama_client.py` | Ollama implementation, prompts, strict response validation |
+| `app/backend/ai/two_stage.py` | Combines classifier + reviewer passes into one calculated verdict |
+| `app/backend/ai/knowledge_base.py` | Loads and validates the MDX section knowledge base |
+| `app/backend/ai/mdx_knowledge_base.json` | The knowledge base itself (versioned, §15) |
+| `app/backend/test_ai_two_stage.py` | Offline regression tests for the two-stage combination logic |
+| `app/backend/test_ai_segmentation.py` | Offline regression tests for the segmentation validator |
+| `app/backend/test_ai_knowledge_base.py` | Offline regression tests for the knowledge base |
+| `app/backend/test_ai_section_resolution.py` | Offline regression tests for case-insensitive section matching |
+
+All four `test_ai_*.py` files are deterministic and run with no Ollama
+installed (they test validation/combination logic directly against
+constructed inputs) — run them the same way as `test_corpus.py`:
+`python test_ai_two_stage.py`, etc. Live end-to-end verification against a
+real model is a separate, manual step; see each file's own docstring.
+
+**API:** `POST /api/items/{id}/analyze-with-ai` (add `?two_stage=true` for
+the second-pass review), `POST /api/items/{id}/segment-with-ai`,
+`POST /api/items/{id}/accept-ai-segments`.
+
+## 5i. AI-suggested permanent heading mappings (build spec §14)
+
+Builds on the existing "HR-taught headings" mechanism (§5g) — it doesn't
+change how a mapping is saved, only makes HR's own past corrections
+visible as a suggestion before they'd otherwise notice the pattern
+themselves. Needs no AI provider at all: this is pure aggregation over
+data already in the database, so it works identically whether
+`AI_PROVIDER` is `ollama` or `none`.
+
+### What it does
+
+Every time HR moves an item out of Unmapped Information into a real
+section, that's a correction. `fields.context` (the original heading text
+`unmapped.py` stamped on the item) survives the move, so once the same
+heading has been corrected to the same section on **2 or more different
+CVs**, with **at least 70% agreement** across all the corrections seen for
+that heading, it becomes a suggestion on the "Unmapped headings" dashboard:
+a pre-filled section dropdown plus "HR has mapped similar headings to
+**X** on N other CVs (Y% agreement). Save this mapping?" Clicking "Teach
+this heading" still goes through the exact same `/api/heading-mappings`
+endpoint as a manually-typed mapping (§5g) — this is a smarter way to
+arrive at that same explicit-approval step, never a new auto-save path.
+
+Both thresholds exist so a single one-off judgement call, or a heading HR
+has genuinely filed inconsistently, never gets suggested as a blanket
+rule — see `insights.py`'s `MIN_CV_COUNT_FOR_SUGGESTION` /
+`MIN_AGREEMENT_RATIO` and their comments for the reasoning.
+
+### The dashboard is a union, not a decoration
+
+The unmapped-headings dashboard already listed headings HR *hasn't* fixed
+yet. If a heading has been corrected on every CV where it's ever
+appeared, it has **zero** remaining unmapped instances — so it would never
+appear in that list at all, and the suggestion built from it would never
+be visible. Fixed by building the dashboard from a proper union of both
+data sources (still-unmapped headings **and** suggestion-only headings),
+with suggestion-only rows getting their own wording ("already corrected on
+N CVs") so they read differently from genuinely-unmapped rows. Caught
+during design review, before shipping, by asking what happens once HR is
+fully caught up — not found via live testing, but confirmed correct by
+live-testing the exact scenario afterward (a heading resolved on every
+instance, on no other list, that still surfaced its suggestion correctly).
+
+### Where it lives
+
+| Path | What it is |
+|---|---|
+| `app/backend/storage.py` | `list_resolved_formerly_unmapped_items()` — items where `section != 'unmapped'` and `fields.context` is set |
+| `app/backend/insights.py` | `suggest_heading_mappings()` — the two-threshold aggregation |
+| `app/backend/test_heading_mapping_suggestions.py` | Offline regression tests for the aggregation logic (repeatability, agreement, exclusions, ranking) |
+| `app/frontend/index.html` | `loadUnmappedHeadingsSummary()` — union-based dashboard rendering |
+
+**API:** `GET /api/heading-mapping-suggestions`.
+
+Verified end-to-end live: seeded synthetic CVs with repeated corrections
+→ suggestion appeared with correct pre-filled dropdown and wording →
+"Teach this heading" saved it through the unmodified §5g endpoint →
+suggestion correctly disappeared afterward → confirmed the underlying
+"takes effect immediately on future uploads" mechanism from §5g was
+untouched. All synthetic test data has since been removed from the live
+database.
+
+---
+
 ## 5d. Reading the whole document
 
 Three sources of content that were previously invisible are now read
@@ -503,6 +669,144 @@ not per-file:
   `"City, ST"` line with no other context — a filter for it was tried and
   reverted because it also deletes real institution/employer names ending in
   a state abbreviation.
+
+### 2026-08-30 additions — headings that don't sit on one clean line, and two review-screen safety gaps
+
+Corpus is now 35 CVs. The common thread in all of these: a CV template that
+lays its heading out in a way `_find_heading_key` was never built to read on
+a single line, silently dumping everything under it into whatever section
+happened to be open above — sometimes swallowing an entire Skills list and
+every job entry into Biography.
+
+- **Headings glued to their own first line of content.** A PDF two-column
+  layout can place a heading directly beside its own first piece of body
+  text with no line break in the extracted text at all
+  ("EXPERIENCE␣␣MARKETING MANAGER, 01/2023 - 11/2025"). Now split at the
+  seam (2+ spaces or a bullet glyph) and both halves recovered
+  (`_split_glued_heading`).
+- **Headings letter-spaced across two physical lines.** A résumé that
+  visually spells out "C A R E E R" then, several unrelated content lines
+  later, "O B J E C T I V E" — because a layout table paired one heading
+  word with a fragment of body text per row — is now reunited into one
+  heading, but *only* when the combined text resolves to an actual known
+  heading (`_merge_split_letter_spaced_headings`); two unrelated
+  letter-spaced headings that just happen to sit near each other never merge.
+- **A single letter-spaced run with no visible word gap**
+  ("P E R S O N A L D E T A I L S", one continuous run, no larger gap
+  marking where "PERSONAL" ends and "DETAILS" begins) is now split at the
+  one position that resolves to real vocabulary (`_split_letter_spaced_words`),
+  strictly on an exact-match basis — the general fuzzy/typo-tolerant lookup
+  used everywhere else is deliberately *not* used here, because trying many
+  candidate splits makes fuzzy matching pick the wrong boundary.
+- **A heading wrapped onto two ordinary lines by a narrow column**
+  ("PERSONAL" / "INFORMATION", no letter-spacing at all) is caught the same
+  way (`_merge_wrapped_headings`) — this was actively leaking a person's age,
+  nationality, and visa status into whatever section preceded it (Language
+  Proficiency, in one real case).
+- **The "file looks scrambled, refused outright" check had a false positive**
+  on any CV whose template letter-spaces its own headings for visual effect —
+  enough of them pushed a fully intact résumé's stray-single-letter ratio
+  past the corruption threshold. Fixed by treating a long, clean run of
+  single-letter tokens as a deliberate heading, not corruption evidence — a
+  *broken* font remaps by glyph id and has no reason to produce those long,
+  uninterrupted runs (the fix's own margin is calibrated against the real
+  corrupted example already in this file, below).
+- **Biography rendered as several separate bullets instead of one
+  paragraph.** Every other section legitimately renders one bullet per item,
+  but a summary that wraps across physical lines with no shared punctuation
+  becomes several sentence-level items upstream — now joined into one
+  paragraph at render time, specifically for the biography section.
+- **A bare GPA fact ("GPA: 7.4 / 10") was being filed under Skills.** The
+  qualifications block's own "no degree/institution/year signal on this line
+  → must be a stray skill sentence" rule fired correctly on it, but a bare
+  GPA isn't a skill — it belongs on the qualification line right above it,
+  where it's now appended instead.
+- **A missing job title/contact/email showed the template's own internal
+  instructions** ("Job title: List each title individually, with
+  Professor…") instead of a blank line, whenever the classifier correctly
+  found nothing. Now clears to blank, matching how every other empty field
+  already behaves.
+- **`08/2020 - 12/2022`-style dates were corrupted into impossible years**
+  like "2112" — the numeric month prefix was mistaken for a 2-digit
+  abbreviated end-year — and a bare `"TITLE, MM/YYYY - MM/YYYY"` line with
+  no bullet glyph wasn't recognised as starting a new job entry, so it
+  welded onto the previous job's last responsibility bullet. Both fixed.
+- **A letter-spaced name plate ("D E V A P R A B H A A .") was never
+  recognised as a name.** Letter-spacing collapse only ran for known
+  headings; the name line was left as a run of single letters no shape
+  check could match. Now offered as an extra letterhead candidate once
+  collapsed, accepted by a relaxed check scoped to exactly this path (see
+  `FIXLOG.md`, 2026-08-30).
+- **One missing letterhead field silently blocked the other three,
+  correctly-extracted ones.** The bug directly above meant `full_name` came
+  up empty on this CV — and because `_populate_letterhead()`'s replacement
+  loop only advanced past the name line when a name was *found*, job title,
+  contact, and email (all three correctly extracted) were left showing the
+  template's own placeholder instructions too, even though the blank-if-
+  missing fix two bullets above already covered each of them individually.
+  The loop now always advances regardless of whether the name itself was
+  found.
+- **Job-duty sentences from a scrambled two-column layout landed under
+  Language Proficiency**, whose only real content should be the language
+  list, because that section was never eligible for meaning-based
+  re-routing at all, and a short unpunctuated line like `"English
+  Malayalam"` welded onto whatever sentence followed it regardless of what
+  it said. `language_proficiency` now gets the same re-routing coverage
+  `skills` already had, plus a shape-based item-boundary rule so a language
+  line never absorbs a following sentence.
+- **Two real posts glued into one job-title line** — a genuine academic CV
+  case, `"Senior Lecturer, International and Comparative Education, and
+  Head of Centre for Academic Success, Middlesex University, Dubai
+  Campus"` — printed as one garbled sentence instead of the template's own
+  documented format ("List each title individually... Administrative
+  titles should follow the format 'Title, Centre or Institute Name.'"). A
+  narrow, curated list of real leadership-title keywords (Head, Director,
+  Dean, Chair, Provost, …) following "and" is now recognised as the
+  boundary between two posts — narrow specifically so it never mistakes an
+  ordinary department name containing "and" (like the one in this exact
+  example) for a second title — and the letterhead now renders a
+  multi-line job title as one paragraph per line under a single "Job
+  title:" label.
+- **The trailing institution/campus name was then flagged as its own
+  problem** ("job title again shows as an address") — the template's own
+  instructions literally say to append "Centre or Institute Name" to an
+  administrative title, but that reads as an address glued onto the role
+  and duplicates what Present Employment already states. A trailing
+  university/college/institute name — plus a following campus name, if
+  present — is now stripped from the end of every job_title line, single
+  or split, whenever it resolves to a real institution keyword; a genuine
+  department name with no institution word in it is left untouched.
+
+### Review-screen safety fixes (frontend, no classifier/generation risk)
+
+- **Deleting an item was instant and permanent, with no confirmation** —
+  the one destructive single-item action in the whole review screen that had
+  no safety net at all, even though the much lower-stakes bulk-approve
+  already had one. Delete now asks `Delete "<item text>"? This can't be
+  undone.` first.
+- **Zero accessibility semantics anywhere in the frontend** — no
+  `aria-*` attributes, no wired `<label for>`, bare status glyphs with no
+  screen-reader announcement, and no visible keyboard-focus ring on anything
+  except the command bar. All three pages (`index.html`, `review.html`,
+  `profiles.html`) now have every field labelled, every status icon either
+  hidden from assistive tech where a nearby pill already says the same thing
+  in words, or given its own `aria-label` where it carries state the visible
+  text doesn't (the progress-tracker's done/current/pending marks), and a
+  consistent red `:focus-visible` ring on every interactive element.
+
+Both are pure frontend additions — nothing about classification, routing, or
+document generation changed, and the full regression suite and a live
+upload→review→delete→generate→download cycle were re-verified after.
+
+### A design system now exists for this project
+
+`PRODUCT.md` and `DESIGN.md` were written this session (via the `impeccable`
+skill — see §11) and describe the product and its visual language: a single
+utilitarian sans-serif, no shadows anywhere, one accent colour (the
+university's own red) held back for actionable/active/error states only, and
+a five-family status-pill system. If you're extending the frontend, read
+`DESIGN.md` first — it documents real, deliberate choices already in
+`styles.css`, not aspirational ones.
 
 ### Garbled text is now detected and refused
 
@@ -677,9 +981,14 @@ review per CV is now under a minute** for a well-structured CV.
 | `app/backend/formatting.py` | Turns structured fields into document lines |
 | `app/backend/quality.py` | Quality report and generation gate |
 | `app/frontend/review.html` | Split-screen review screen |
+| `app/backend/ai/` | Optional local AI assistance — see §5h for full detail |
+| `app/backend/insights.py` | Cross-CV dashboard aggregations, incl. AI-suggested heading mappings (§5i) |
 | `app/template/` | The official MDX template (never modified) |
 | `app/data/` | Uploads, generated files, photos, SQLite database |
 | `FIXLOG.md` | Defect history: cause, fix, and rejected approaches |
+| `PRODUCT.md` | Who this is for and what it does — read before making product decisions |
+| `DESIGN.md` | The frontend's visual system, extracted from the real CSS — read before touching frontend styling |
+| `.impeccable/design.json` | Machine-readable sidecar for `DESIGN.md` (tonal ramps, component snippets) |
 
 ### Key API endpoints
 
@@ -698,10 +1007,51 @@ review per CV is now under a minute** for a well-structured CV.
 | `DELETE /api/heading-mappings/{id}` | Remove a taught mapping |
 | `POST /api/cv/{id}/generate` | Produce the MDX DOCX |
 | `GET  /api/cv/{id}/download` | Download it |
+| `POST /api/items/{id}/analyze-with-ai` | Optional local AI section suggestion (§5h) |
+| `POST /api/items/{id}/segment-with-ai` | Optional local AI split proposal (§5h) |
+| `POST /api/items/{id}/accept-ai-segments` | Apply an accepted AI split |
+| `GET  /api/heading-mapping-suggestions` | AI-suggested heading mappings from HR's own past corrections (§5i) |
 
 ---
 
-## 10. Suggested next steps
+## 10. Transferring this build to another account/machine
+
+**Copy the whole project folder** (`MDX CV CONVERTER`) — everything the app
+needs to run is inside it: backend, frontend, the official template, the
+SQLite database in `app/data/`, and `PRODUCT.md`/`DESIGN.md`.
+
+On the new machine:
+
+```
+pip install -r app/backend/requirements.txt
+cd app/backend
+python -m uvicorn main:app --port 8000
+```
+
+**What does *not* travel automatically:**
+
+- **`app/data/`** carries every CV, photo, and generated document already in
+  the system, plus HR-taught heading mappings (§5g) and the auto-approval
+  threshold (§3). Decide deliberately whether the new account should start
+  clean or inherit this history — copying the folder brings all of it,
+  including uploaded staff CVs.
+- **Python itself and `requirements.txt`'s packages** aren't bundled; run the
+  `pip install` above on the new machine.
+- **The optional AI upgrade** (`ANTHROPIC_API_KEY` in `backend/.env`) is a
+  local secret, not committed to the repo — set it again on the new account
+  if that path is wanted there. The app works fully without it.
+- **The `impeccable` design skill** (used to write `PRODUCT.md`/`DESIGN.md`
+  this session) is installed *outside* this project, at
+  `~/.claude/skills/impeccable` on this machine — copying this folder does
+  **not** bring the skill itself, only the markdown/JSON files it already
+  wrote, which read on their own with no dependency on the skill being
+  installed. If the new account wants to keep running `/impeccable` commands
+  against this project, reinstall it there separately (`npx impeccable
+  install`, requires Node.js) — it is not required to run the app itself.
+
+---
+
+## 11. Suggested next steps
 
 1. **Decide the auto-approval policy** with HR — it is the one behavioural
    change that needs an explicit sign-off (see §3).

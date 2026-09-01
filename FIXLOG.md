@@ -13,6 +13,32 @@ cd app/backend && python test_corpus.py
 
 ---
 
+## 2026-08-30 — A decorative letter-spaced résumé: name detection, a cascading letterhead bug, and job-duty text under "Languages"
+
+Found live-testing a real uploaded CV (a medical-admin résumé whose whole
+layout letter-spaces every heading AND the person's own name for visual
+effect, plus a scrambled two-column reading order). Suite: **33/35
+passing** throughout (the 2 failures are pre-existing and unrelated — see
+below). Regression tests for these three live in
+`app/backend/test_letterhead_and_language_routing.py` rather than being
+added to `test_corpus.py`'s real-file corpus: the triggering CV carries a
+real person's name, email, and phone number, and reconstructing the same
+structural shape with synthetic data avoids keeping that PII around
+indefinitely as a permanent test fixture.
+
+| Defect | Cause | Fix |
+|---|---|---|
+| A letter-spaced name ("D E V A P R A B H A A .") was never recognised as a name at all | Letter-spacing collapse only ever ran for known section headings (matched against an official/synonym vocabulary); nothing collapsed the name-plate line, and even collapsed, "DEVAPRABHAA" is a single run with no recoverable word boundaries, which the ordinary name-shape check (`NAME_LINE_RE`, requires >=2 words) can never pass | New `_collapse_letter_spaced_name()` (tolerant of a trailing decorative period the heading check correctly rejects) offers the collapsed form as an extra letterhead candidate; a new relaxed check `_looks_like_collapsed_name()` accepts a single all-caps run for candidates known to come from this path only, still guarded against resolving to a real heading |
+| The entire letterhead (job title, contact, email — all three correctly extracted) still showed the template's own "Job title: List each title individually…" placeholder instructions | `_populate_letterhead()`'s replacement loop only advanced past the name line when a name was actually *found* — one missing field silently blocked three unrelated, already-correct ones from ever being written | The loop now always advances past the "FULL NAME" line; only whether the name text itself gets written stays conditional, matching how the other three fields already handle a missing value |
+| Job-duty sentences from a scrambled two-column layout ("Coordinated and streamlined hospital services…", "Acted as a liaison between departments…") ended up filed under Language Proficiency, whose only real content should be the language list | Two compounding gaps: (1) `language_proficiency` wasn't in `routing.ROUTABLE_SOURCE_SECTIONS` at all, so meaning-based re-routing never even looked at its contents; (2) even after fixing that, a short unpunctuated language line ("English Malayalam") welded onto the very next sentence during item-grouping regardless of what that sentence said, since sentence-boundary grouping only splits on trailing punctuation | Added `language_proficiency` to `ROUTABLE_SOURCE_SECTIONS` and to the existing action-verb `SCOPED_RULES` entry (mirrors the identical fix already shipped for `skills`); added `acted` to `ACTION_VERB_RE`'s vocabulary; new `JOB_DUTY_SENTENCE_RE` shape check forces an item boundary in `_group_into_items` when the *next* line is itself a full duty-style sentence, regardless of whether the previous line ended in punctuation |
+
+Found immediately after, on a different real CV (an academic with two simultaneous posts) — same live-test session, same date:
+
+| Defect | Cause | Fix |
+|---|---|---|
+| Job title stored and printed as one garbled line: `"Senior Lecturer, International and Comparative Education, and Head of Centre for Academic Success, Middlesex University, Dubai Campus"` | The source CV genuinely lists two real posts on one physical line, joined by "and" — nothing recognised this as two separate titles needing the template's own documented format ("List each title individually... Administrative titles should follow the format 'Title, Centre or Institute Name.'") | New `ADMIN_TITLE_CONNECTOR_RE`: a narrow, curated list of real leadership-title keywords (Head/Director/Dean/Chair/Provost/…) following "and" — deliberately not a bare `\band\b` split, which would also break an ordinary department name like "International and Comparative Education" in half. `_clean_job_titles()` splits the value at that boundary into two lines (joined by `\n`), flagged `multi_title_split` at reduced confidence for review; `template_engine._populate_letterhead()` renders a multi-line job title as one paragraph per line under the same "Job title:" label, instead of the single-run-per-field logic every other letterhead field still uses |
+| **Immediate follow-up, same CV, real HR feedback**: "job title again shows as an address" — the split above still left the trailing `"Middlesex University, Dubai Campus"` on the second line | The MDX template's own placeholder text literally instructs "Title, Centre or Institute Name" — the code followed that instruction, but it wasn't actually what HR wanted: the institution/campus name reads as an address fragment glued onto a title, and it's redundant with what Present Employment already states in full | New `TRAILING_INSTITUTION_RE` (reuses the University/College/Institute/Academy/… keyword vocabulary `INSTITUTION_RE` already uses elsewhere) strips a trailing institution+campus tail from the END of every job_title line — applied to both lines of a dual-title split and to an ordinary single-line title alike, via `_clean_job_titles()` (renamed from `_split_dual_title_job_title`, now doing both jobs). Scoped to only ever strip from the end and only when it resolves to a real institution keyword, so "International and Comparative Education" (a department name with no institution word in it) is untouched |
+
 ## 2026-08-29 — Résumé-shaped employment lines, a global extraction bug, and hyphenated names
 
 Two rounds, both triggered by HR testing real/reconstructed CVs and asking for

@@ -42,7 +42,7 @@
       <button class="btn-secondary btn-sm" id="shortcutsBtn">Keyboard shortcuts</button>
     </div>
     <form class="command-bar" id="commandBar" autocomplete="off">
-      <input type="text" id="commandInput"
+      <input type="text" id="commandInput" aria-label="Command"
              placeholder="Type a command…  e.g. “approve publications”, “add Best Paper Award 2025 to awards”">
       <button class="btn-secondary btn-sm" type="submit">Run</button>
     </form>
@@ -125,7 +125,12 @@ function renderProgress(status) {
     if (i < activeIdx) cls += " done";
     else if (i === activeIdx) cls += " active";
     const mark = i < activeIdx ? "✓ " : (i === activeIdx ? "● " : "○ ");
-    return `<span class="${cls}">${mark}${s.label}</span>`;
+    // Unlike the quality-report glyphs, this mark carries information the
+    // visible label text doesn't repeat (done vs. current vs. not-yet-
+    // reached) -- aria-hiding it alone would remove that, not just
+    // de-duplicate it. Carried instead on the span's own aria-label.
+    const state = i < activeIdx ? "done" : (i === activeIdx ? "current" : "not started");
+    return `<span class="${cls}" aria-label="${s.label} (${state})"><span aria-hidden="true">${mark}</span>${s.label}</span>`;
   }).join("");
 }
 
@@ -270,7 +275,11 @@ function renderQuality(report, cvStatus) {
     .filter(s => s.section !== "unmapped")
     .map(s => {
       const icon = s.status === "verified" ? "✓" : (s.status === "needs_review" ? "⚠" : "✕");
-      return `<div class="qr-item"><span>${icon} ${s.label}</span>${pill(s.status.replace("_"," "), s.status)}</div>`;
+      // aria-hidden on the glyph: the pill right next to it already spells
+      // the same status out as text ("verified" / "needs review" /
+      // "missing"), so a screen reader would otherwise announce it twice --
+      // once as a bare, ambiguous symbol, once as the real word.
+      return `<div class="qr-item"><span><span aria-hidden="true">${icon}</span> ${s.label}</span>${pill(s.status.replace("_"," "), s.status)}</div>`;
     }).join("");
 
   // Purely informational -- an approved item with a suspiciously short
@@ -301,6 +310,18 @@ function fieldEditorRow(item) {
     .map(s => `<option value="${s.key}" ${s.key === item.section ? "selected" : ""}>${s.label}</option>`)
     .join("");
 
+  // "Analyze with AI" only offered where a rule-based decision was already
+  // uncertain -- unmapped, or below high confidence. A high-confidence item
+  // the classifier is already sure about gets no AI button at all; sending
+  // it to AI anyway would add nothing but latency and a second opinion
+  // nobody asked for.
+  const aiEligible = item.section === "unmapped" || item.confidence_band !== "high";
+  // "Split with AI" additionally requires the text to be long enough that
+  // it plausibly reads as more than one fact -- a short, already-atomic
+  // item has nothing to split, and offering the button anyway just invites
+  // a pointless AI call that can only ever return NO_SPLIT.
+  const splitEligible = aiEligible && (item.source.raw_text || "").length > 120;
+
   return `
     <div class="item-row" data-item-id="${item.item_id}" data-status="${item.status}">
       <div class="item-top">
@@ -308,18 +329,22 @@ function fieldEditorRow(item) {
         ${pill(statusLabel(item.status), item.status)}
         <span class="muted" style="margin-left:auto;">${Math.round(item.confidence * 100)}% confidence</span>
       </div>
-      <textarea rows="2" class="line-input">${item.display_line}</textarea>
+      <textarea rows="2" class="line-input" aria-label="Item text">${item.display_line}</textarea>
       <details class="source"><summary>Source text</summary>${item.source.raw_text}</details>
       ${flagsHtml}
       <div class="item-top">
-        <select class="move-select">${sectionOptions}</select>
+        <select class="move-select" aria-label="Move item to section">${sectionOptions}</select>
         <div class="actions">
           <button class="btn-secondary btn-sm act-save">Save edit</button>
           <button class="btn-secondary btn-sm act-approve">Approve</button>
           <button class="btn-danger btn-sm act-reject">Reject</button>
           <button class="btn-danger btn-sm act-delete">Delete</button>
+          ${aiEligible ? `<button class="btn-secondary btn-sm act-analyze-ai">Analyze with AI</button>` : ""}
+          ${splitEligible ? `<button class="btn-secondary btn-sm act-split-ai">Split with AI</button>` : ""}
         </div>
       </div>
+      <div class="ai-suggestion" style="display:none;"></div>
+      <div class="ai-split-suggestion" style="display:none;"></div>
     </div>
   `;
 }
@@ -343,7 +368,7 @@ function photoSectionBlock(cv) {
               ? "Auto-detected from the source CV, or uploaded manually. Replace it if it's the wrong image."
               : "No photo was found automatically in the source CV. Upload one directly."}
           </p>
-          <input type="file" id="photoFileInput" accept="image/png,image/jpeg" style="display:block; margin-bottom:0.5rem;">
+          <input type="file" id="photoFileInput" accept="image/png,image/jpeg" aria-label="Choose profile photo file" style="display:block; margin-bottom:0.5rem;">
           <div style="display:flex; gap:0.5rem;">
             <button class="btn-secondary btn-sm" id="photoUploadBtn">${hasPhoto ? "Replace photo" : "Upload photo"}</button>
             ${hasPhoto ? `<button class="btn-danger btn-sm" id="photoRemoveBtn">Remove</button>` : ""}
@@ -375,7 +400,7 @@ function renderTeachHeadingPanel(items) {
     <div class="teach-row">
       <span class="teach-heading-label"></span>
       <span class="muted">always file under</span>
-      <select class="teach-select" data-context-index="${i}">${sectionOptions}</select>
+      <select class="teach-select" data-context-index="${i}" aria-label="File this heading under">${sectionOptions}</select>
       <button class="btn-secondary btn-sm act-teach-heading" data-context-index="${i}">Teach this heading</button>
       <span class="teach-confirm muted" data-context-index="${i}" style="display:none;"></span>
     </div>`).join("");
@@ -456,7 +481,7 @@ function renderSections(itemsBySection, cv) {
         ${rows}
         <div class="item-row">
           <div class="item-top">
-            <input type="text" class="add-input" placeholder="Add missing item to this section…" style="flex:1;">
+            <input type="text" class="add-input" placeholder="Add missing item to this section…" aria-label="Add missing item to ${sec.label}" style="flex:1;">
             <button class="btn-secondary btn-sm act-add">Add</button>
           </div>
         </div>
@@ -468,6 +493,8 @@ function renderSections(itemsBySection, cv) {
   container.querySelectorAll(".act-approve").forEach(btn => btn.addEventListener("click", onApprove));
   container.querySelectorAll(".act-reject").forEach(btn => btn.addEventListener("click", onReject));
   container.querySelectorAll(".act-delete").forEach(btn => btn.addEventListener("click", onDelete));
+  container.querySelectorAll(".act-analyze-ai").forEach(btn => btn.addEventListener("click", onAnalyzeAI));
+  container.querySelectorAll(".act-split-ai").forEach(btn => btn.addEventListener("click", onSplitAI));
   container.querySelectorAll(".move-select").forEach(sel => sel.addEventListener("change", onMove));
   container.querySelectorAll(".act-add").forEach(btn => btn.addEventListener("click", onAdd));
   container.querySelectorAll(".act-approve-section").forEach(btn =>
@@ -528,12 +555,163 @@ async function onMove(e) {
   await patchAndReload(row.dataset.itemId, { section: e.target.value });
 }
 async function onDelete(e) {
+  const row = e.target.closest(".item-row");
   const id = itemIdFrom(e.target);
+  // Permanent -- there is no undo once the row is gone, so this needs the
+  // same confirm() guard bulk-approve already has, not just for consistency
+  // but because this is the one destructive single-item action with no
+  // safety net at all today.
+  const preview = (row.querySelector(".line-input")?.value || "").trim().slice(0, 80);
+  const label = preview ? `"${preview}${preview.length === 80 ? "…" : ""}"` : "this item";
+  if (!confirm(`Delete ${label}? This can't be undone.`)) return;
   try {
     await apiFetch(`/api/items/${id}`, { method: "DELETE" });
     await loadAll();
   } catch (err) {
     document.getElementById("errorArea").innerHTML = `<div class="error-banner">${err.message}</div>`;
+  }
+}
+// "Analyze with AI" is read-only until the reviewer explicitly accepts the
+// suggestion -- this handler only ever renders an opinion into the row; it
+// never calls PATCH itself. Accepting reuses patchAndReload exactly like a
+// manual section move (onMove above), so an AI-assisted move is stored and
+// audited no differently from one a person made by hand.
+async function onAnalyzeAI(e) {
+  const row = e.target.closest(".item-row");
+  const id = itemIdFrom(e.target);
+  const box = row.querySelector(".ai-suggestion");
+  const btn = e.target;
+  btn.disabled = true;
+  btn.textContent = "Analyzing…";
+  box.style.display = "block";
+  box.innerHTML = `<span class="muted">Asking the local AI model…</span>`;
+  try {
+    const result = await apiFetch(`/api/items/${id}/analyze-with-ai`, { method: "POST" });
+    renderAISuggestion(box, id, result, { verified: false });
+  } catch (err) {
+    box.innerHTML = `<span class="muted">${err.message}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Analyze with AI";
+  }
+}
+
+// Shared by the single-pass result (onAnalyzeAI) and the two-stage result
+// (onVerifyWithSecondPass) -- both return the same {status, section,
+// confidence, reasoning} shape; two-stage additionally carries a
+// `two_stage` breakdown this renders as extra detail, never as a
+// replacement for the same Accept/Dismiss control a person always gets.
+function renderAISuggestion(box, id, result, { verified }) {
+  if (result.status === "REVIEW_REQUIRED" || !result.section) {
+    box.innerHTML = `<span class="muted">${verified
+      ? "The two AI passes couldn't reach a confident, agreed answer for this item — it still needs a person to decide."
+      : "AI wasn't confident enough to suggest a section for this item — it still needs a person to decide."}</span>
+      ${result.two_stage ? twoStageDetailHtml(result.two_stage) : ""}`;
+    return;
+  }
+
+  const verifyBtn = (!verified && result.two_stage === undefined)
+    ? `<button class="btn-secondary btn-sm act-ai-verify">Verify with second AI pass</button>` : "";
+
+  box.innerHTML = `
+    <div><strong>${verified ? "Verified AI suggestion:" : "AI suggests:"}</strong> ${result.section_label} (${Math.round(result.confidence * 100)}% confidence)</div>
+    <div class="muted">${result.reasoning}</div>
+    ${result.two_stage ? twoStageDetailHtml(result.two_stage) : ""}
+    <div class="actions" style="margin-top:0.4rem;">
+      <button class="btn-secondary btn-sm act-ai-accept" data-section="${result.section}">Accept — move item</button>
+      <button class="btn-secondary btn-sm act-ai-dismiss">Dismiss</button>
+      ${verifyBtn}
+    </div>`;
+  box.querySelector(".act-ai-accept").addEventListener("click", async (ev) => {
+    await patchAndReload(id, { section: ev.target.dataset.section });
+  });
+  box.querySelector(".act-ai-dismiss").addEventListener("click", () => {
+    box.style.display = "none";
+    box.innerHTML = "";
+  });
+  const verifyEl = box.querySelector(".act-ai-verify");
+  if (verifyEl) verifyEl.addEventListener("click", () => onVerifyWithSecondPass(id, box));
+}
+
+function twoStageDetailHtml(twoStage) {
+  const p1 = twoStage.pass1;
+  const p2 = twoStage.pass2;
+  return `<details style="margin-top:0.4rem;">
+    <summary class="muted" style="cursor:pointer;">Show both AI passes</summary>
+    <div class="muted" style="margin-top:0.3rem;">
+      <div><strong>Pass 1 (classifier):</strong> ${p1.section_label || "no section"} (${Math.round(p1.confidence * 100)}%) — ${p1.reasoning}</div>
+      <div><strong>Pass 2 (independent reviewer):</strong> ${p2 ? `${p2.verdict}${p2.section_label ? " → " + p2.section_label : ""} (${Math.round(p2.confidence * 100)}%) — ${p2.reasoning}` : "did not run"}</div>
+    </div>
+  </details>`;
+}
+
+async function onVerifyWithSecondPass(id, box) {
+  box.innerHTML = `<span class="muted">Running an independent second AI pass to check the first…</span>`;
+  try {
+    const result = await apiFetch(`/api/items/${id}/analyze-with-ai?two_stage=true`, { method: "POST" });
+    renderAISuggestion(box, id, result, { verified: true });
+  } catch (err) {
+    box.innerHTML = `<span class="muted">${err.message}</span>`;
+  }
+}
+
+// Splitting is read-only until Accept, same discipline as the single-item
+// AI suggestion above -- segment-with-ai only ever proposes; accepting
+// calls the dedicated accept-ai-segments endpoint, which re-validates the
+// exact same segments server-side against the item's real, current source
+// text before creating anything (see main.py) rather than trusting this
+// client-side echo of what was shown.
+async function onSplitAI(e) {
+  const row = e.target.closest(".item-row");
+  const id = itemIdFrom(e.target);
+  const box = row.querySelector(".ai-split-suggestion");
+  const btn = e.target;
+  btn.disabled = true;
+  btn.textContent = "Analyzing…";
+  box.style.display = "block";
+  box.innerHTML = `<span class="muted">Asking the local AI model whether this is more than one fact…</span>`;
+  try {
+    const result = await apiFetch(`/api/items/${id}/segment-with-ai`, { method: "POST" });
+    if (result.status !== "SEGMENT" || !result.segments || result.segments.length < 2) {
+      box.innerHTML = `<span class="muted">${result.status === "NO_SPLIT"
+        ? "AI judged this is genuinely one fact — no split proposed."
+        : "AI wasn't confident enough to propose a split for this item."}</span>`;
+      return;
+    }
+    const segmentsHtml = result.segments.map((s, i) =>
+      `<div style="margin-top:0.3rem;"><strong>${i + 1}. ${s.section_label}:</strong> ${s.text}</div>`
+    ).join("");
+    box.innerHTML = `
+      <div><strong>AI proposes splitting this into ${result.segments.length} items:</strong></div>
+      <div class="muted">${result.reasoning}</div>
+      ${segmentsHtml}
+      <div class="actions" style="margin-top:0.4rem;">
+        <button class="btn-secondary btn-sm act-split-accept">Accept — split into ${result.segments.length} items</button>
+        <button class="btn-secondary btn-sm act-split-dismiss">Dismiss</button>
+      </div>`;
+    box.querySelector(".act-split-accept").addEventListener("click", async (ev) => {
+      ev.target.disabled = true;
+      ev.target.textContent = "Splitting…";
+      try {
+        await apiFetch(`/api/items/${id}/accept-ai-segments`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ segments: result.segments.map(s => ({ text: s.text, section: s.section })) }),
+        });
+        await loadAll();
+      } catch (err) {
+        document.getElementById("errorArea").innerHTML = `<div class="error-banner">${err.message}</div>`;
+      }
+    });
+    box.querySelector(".act-split-dismiss").addEventListener("click", () => {
+      box.style.display = "none";
+      box.innerHTML = "";
+    });
+  } catch (err) {
+    box.innerHTML = `<span class="muted">${err.message}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Split with AI";
   }
 }
 async function onApproveSection(e) {

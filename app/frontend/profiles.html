@@ -39,22 +39,22 @@
     <h2 id="editTitle">New profile</h2>
     <form id="editForm">
       <div class="item-row" style="padding:0; border:none;">
-        <label class="muted">Full name</label>
+        <label class="muted" for="fldFullName">Full name</label>
         <input type="text" id="fldFullName" required>
         <p class="muted" id="nameLockedNote" style="display:none; margin:0;">
           To rename, delete this profile and create a new one — the profile's id is derived from its name, and a future CV can only be matched against the id it was saved under.
         </p>
       </div>
       <div class="item-row" style="padding:0.6rem 0 0; border:none;">
-        <label class="muted">Job title</label>
+        <label class="muted" for="fldJobTitle">Job title</label>
         <input type="text" id="fldJobTitle">
       </div>
       <div class="item-row" style="padding:0.6rem 0 0; border:none;">
-        <label class="muted">MDX email</label>
+        <label class="muted" for="fldEmail">MDX email</label>
         <input type="text" id="fldEmail">
       </div>
       <div class="item-row" style="padding:0.6rem 0 0; border:none;">
-        <label class="muted">Desk phone</label>
+        <label class="muted" for="fldPhone">Desk phone</label>
         <input type="text" id="fldPhone">
       </div>
 
@@ -131,7 +131,7 @@ function renderLinkFields(links) {
   container.innerHTML = Object.entries(LINK_LABELS).map(([key, label]) => `
     <div class="item-row" style="padding:0.3rem 0; border:none;">
       <label class="muted">${label}</label>
-      <input type="text" class="link-field" data-key="${key}" value="${(links[key] || "").replace(/"/g, "&quot;")}">
+      <input type="text" class="link-field" data-key="${key}" aria-label="${label}" value="${(links[key] || "").replace(/"/g, "&quot;")}">
     </div>
   `).join("");
 }
@@ -141,7 +141,7 @@ function renderMembershipRows(memberships) {
   const rows = memberships.length ? memberships : [""];
   container.innerHTML = rows.map(m => `
     <div class="item-top" style="margin-bottom:0.4rem;">
-      <input type="text" class="membership-field" value="${(m || "").replace(/"/g, "&quot;")}" style="flex:1;">
+      <input type="text" class="membership-field" aria-label="Membership" value="${(m || "").replace(/"/g, "&quot;")}" style="flex:1;">
       <button type="button" class="btn-danger btn-sm act-remove-membership">Remove</button>
     </div>
   `).join("");

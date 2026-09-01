@@ -1,0 +1,184 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-30T00:00:00Z",
+  "title": "Design System: MDX Faculty CV Converter",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "Institutional Red",
+        "canonical": "oklch(53% 0.22 25)",
+        "tonalRamp": [
+          "oklch(15% 0.10 25)",
+          "oklch(25% 0.15 25)",
+          "oklch(35% 0.19 25)",
+          "oklch(45% 0.21 25)",
+          "oklch(53% 0.22 25)",
+          "oklch(65% 0.18 25)",
+          "oklch(80% 0.10 25)",
+          "oklch(95% 0.03 25)"
+        ]
+      },
+      "primary-deep": {
+        "role": "primary",
+        "displayName": "Institutional Red, Deep",
+        "canonical": "oklch(43% 0.20 22)",
+        "tonalRamp": [
+          "oklch(15% 0.09 22)",
+          "oklch(22% 0.13 22)",
+          "oklch(30% 0.17 22)",
+          "oklch(38% 0.19 22)",
+          "oklch(43% 0.20 22)",
+          "oklch(58% 0.17 22)",
+          "oklch(75% 0.09 22)",
+          "oklch(92% 0.03 22)"
+        ]
+      },
+      "bg": {
+        "role": "neutral",
+        "displayName": "Paper",
+        "canonical": "oklch(98.5% 0.003 90)",
+        "tonalRamp": [
+          "oklch(20% 0.005 90)",
+          "oklch(32% 0.005 90)",
+          "oklch(45% 0.005 90)",
+          "oklch(60% 0.004 90)",
+          "oklch(75% 0.004 90)",
+          "oklch(88% 0.003 90)",
+          "oklch(95% 0.003 90)",
+          "oklch(98.5% 0.003 90)"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "oklch(22% 0.002 90)"
+      },
+      "text-soft": {
+        "role": "neutral",
+        "displayName": "Soft Ink",
+        "canonical": "oklch(42% 0.005 90)"
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Soft Line",
+        "canonical": "oklch(87% 0.005 90)"
+      },
+      "good": {
+        "role": "success",
+        "displayName": "Approved Green",
+        "canonical": "oklch(46% 0.11 150)"
+      },
+      "warn": {
+        "role": "warning",
+        "displayName": "Needs-Review Amber",
+        "canonical": "oklch(48% 0.11 75)"
+      },
+      "bad": {
+        "role": "error",
+        "displayName": "Error Red",
+        "canonical": "oklch(43% 0.20 22)"
+      },
+      "edited": {
+        "role": "info",
+        "displayName": "Edited Blue",
+        "canonical": "oklch(42% 0.11 255)"
+      }
+    },
+    "typographyMeta": {
+      "title": { "displayName": "Title", "purpose": "Page-level h1, once per screen." },
+      "body": { "displayName": "Body", "purpose": "Default reading size for items, table cells, buttons, fields." },
+      "label": { "displayName": "Label", "purpose": "Table headers, pills, flags, key caps — uppercase when naming a category." }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [
+      { "name": "stack", "value": "1000px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one loud control per screen — Generate MDX CV, Save, Approve all remaining.",
+      "html": "<button class=\"ds-btn-primary\">Generate MDX CV</button>",
+      "css": ".ds-btn-primary { font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; font-size: 0.92rem; font-weight: 600; background: #E30613; color: #fff; border: 1px solid transparent; border-radius: 6px; padding: 0.55rem 1.1rem; cursor: pointer; transition: background 0.15s; } .ds-btn-primary:hover { background: #B8050F; } .ds-btn-primary:focus-visible { outline: 2px solid #E30613; outline-offset: 2px; } .ds-btn-primary:disabled { background: #E5E3E0; color: #5C5955; cursor: not-allowed; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Every non-primary action — Refresh, Hide, Jump to next needing review.",
+      "html": "<button class=\"ds-btn-secondary\">Refresh</button>",
+      "css": ".ds-btn-secondary { font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; font-size: 0.92rem; font-weight: 600; background: #fff; color: #1A1A1A; border: 1px solid #DEDCD8; border-radius: 6px; padding: 0.55rem 1.1rem; cursor: pointer; transition: background 0.15s; } .ds-btn-secondary:hover { background: #FAFAF9; } .ds-btn-secondary:focus-visible { outline: 2px solid #E30613; outline-offset: 2px; }"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Destructive actions — Delete item, Reject. Stays quiet until touched.",
+      "html": "<button class=\"ds-btn-danger\">Delete</button>",
+      "css": ".ds-btn-danger { font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; font-size: 0.92rem; font-weight: 600; background: #fff; color: #B8050F; border: 1px solid #B8050F; border-radius: 6px; padding: 0.55rem 1.1rem; cursor: pointer; transition: background 0.15s; } .ds-btn-danger:hover { background: #FBE7E8; } .ds-btn-danger:focus-visible { outline: 2px solid #B8050F; outline-offset: 2px; }"
+    },
+    {
+      "name": "Status Pill — Approved",
+      "kind": "chip",
+      "refersTo": "pill-verified",
+      "description": "The good/approved/verified/high-confidence state, part of a five-family status system (good/warn/bad/edited/neutral) used everywhere status appears.",
+      "html": "<span class=\"ds-pill ds-pill-good\">Approved</span>",
+      "css": ".ds-pill { display: inline-flex; align-items: center; gap: 0.3rem; font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; padding: 0.18rem 0.55rem; border-radius: 20px; } .ds-pill-good { background: #E7F5EC; color: #1E7A3E; }"
+    },
+    {
+      "name": "Status Pill — Needs Review",
+      "kind": "chip",
+      "refersTo": "pill-needs-review",
+      "description": "The warn/pending state of the same pill family.",
+      "html": "<span class=\"ds-pill ds-pill-warn\">Needs Review</span>",
+      "css": ".ds-pill.ds-pill-warn { display: inline-flex; align-items: center; gap: 0.3rem; font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; padding: 0.18rem 0.55rem; border-radius: 20px; background: #FDF2DA; color: #9A6B00; }"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "The base container for every content block on every screen.",
+      "html": "<div class=\"ds-card\">Card content</div>",
+      "css": ".ds-card { background: #FFFFFF; border: 1px solid #DEDCD8; border-radius: 8px; padding: 1.4rem 1.6rem; }"
+    },
+    {
+      "name": "Source-Pane Split View",
+      "kind": "custom",
+      "refersTo": "source-pane",
+      "description": "Signature component: a sticky, collapsible pane holding the original CV, beside the scrolling review flow — makes 'verify before you trust it' physically possible on screen.",
+      "html": "<div class=\"ds-workspace\"><aside class=\"ds-source-pane\"><div class=\"ds-source-pane-head\"><span>Original CV</span><button class=\"ds-btn-secondary\">Hide</button></div><div class=\"ds-source-pane-body\">Source text…</div></aside><main class=\"ds-review-pane\">Review items…</main></div>",
+      "css": ".ds-workspace { display: grid; grid-template-columns: minmax(320px, 38%) 1fr; gap: 1.2rem; align-items: start; } .ds-source-pane { position: sticky; top: 1rem; background: #FFFFFF; border: 1px solid #DEDCD8; border-radius: 8px; max-height: calc(100vh - 2rem); display: flex; flex-direction: column; overflow: hidden; } .ds-source-pane-head { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; padding: 0.7rem 0.9rem; border-bottom: 1px solid #DEDCD8; } .ds-source-pane-body { flex: 1; overflow: auto; padding: 0.9rem; font-size: 0.8rem; line-height: 1.5; color: #1A1A1A; } @media (max-width: 1000px) { .ds-workspace { grid-template-columns: 1fr; } .ds-source-pane { position: static; max-height: 60vh; } }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Registrar's Ledger",
+    "overview": "This is an internal tool for turning someone else's CV into an official university record — not a product being sold, not a brand being expressed. Every visual decision already in the code serves legibility and trust over personality: a single utilitarian sans-serif throughout, no shadows anywhere, containment done with 1px borders instead of elevation, and one saturated color — Middlesex University's own red — held in reserve for the handful of moments that are actually decisions (primary actions, live focus, the currently-reviewed item, error states). The palette otherwise stays in warm paper neutrals, and status is read through color+shape (pill badges), never decoration. Nothing here should read as designed for its own sake. The Registrar's Ledger commits to institutional plainness as an aesthetic choice, not an absence of one: red means \"this is the one true action or the one real problem on this screen,\" borders mean \"this is a distinct record,\" and a pill means \"this is this item's status, stated once, unambiguously.\"",
+    "keyCharacteristics": [
+      "One accent color, spent deliberately, never decoratively.",
+      "Flat by default — no shadows anywhere in the incumbent system.",
+      "Status is communicated through color-coded pills, consistently, everywhere it appears.",
+      "A single utilitarian type family; hierarchy comes from size and weight, not font choice."
+    ],
+    "rules": [
+      { "name": "The One Red Rule", "body": "Institutional Red appears only on the interactive/active/erroneous elements of a screen — never as a background, a decorative accent, or a passive label color. If red shows up somewhere, it's telling the reviewer to look or act.", "section": "colors" },
+      { "name": "The One Typeface Rule", "body": "No second font family is introduced anywhere, including for numbers, code-like content, or emphasis. Weight and size carry all hierarchy.", "section": "typography" },
+      { "name": "The No-Shadow Rule", "body": "Depth is never simulated. A border marks a boundary; nothing is ever lifted, layered, or given a drop shadow to imply hierarchy.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep Institutional Red reserved for actionable/active/erroneous elements only.",
+      "Do use a 1px Soft Line border for every container boundary; never introduce a shadow.",
+      "Do use the pill component for any new status concept, joining the existing good/warn/bad/edited/neutral family.",
+      "Do keep the source-pane split-view pattern for any future screen where a reviewer needs to verify a decision against original evidence."
+    ],
+    "donts": [
+      "Don't introduce a second typeface or a display/serif font anywhere.",
+      "Don't add drop shadows, glows, or elevation layering to imply importance.",
+      "Don't use Institutional Red for decoration, large fills, or passive/informational content.",
+      "Don't invent a sharp-cornered or fully-square component."
+    ]
+  }
+}

@@ -20,6 +20,23 @@ for d in (UPLOADS_DIR, GENERATED_DIR, PHOTOS_DIR, DB_PATH.parent):
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5")
 
+# Optional local, offline "Analyze with AI" review-screen action (see
+# ai/provider.py). AI_PROVIDER=none is the default -- nothing about upload,
+# classification, or generation changes unless a reviewer explicitly opts
+# in per item. This is unrelated to the ANTHROPIC_* whole-document AI path
+# above; the two can be configured independently.
+AI_PROVIDER = os.getenv("AI_PROVIDER", "none")
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+# The build spec's own example config uses 120 (§4); measured directly: once
+# prompts were enriched with the §15 knowledge base (per-section
+# descriptions, examples, exclusion rules -- ai/knowledge_base.py), a
+# 60s default was too tight and real requests against a small local model
+# (llama3.2) started timing out around 64s. 120 leaves real headroom above
+# the observed worst case rather than trimming the prompt to fit an
+# arbitrary budget.
+AI_TIMEOUT = int(os.getenv("AI_TIMEOUT", "120"))
+
 MAX_UPLOAD_MB = 25
 ALLOWED_EXTENSIONS = {".docx", ".pdf"}
 

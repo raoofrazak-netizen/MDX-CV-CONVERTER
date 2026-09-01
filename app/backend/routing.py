@@ -87,7 +87,7 @@ ACTION_VERB_RE = re.compile(
     r"|improved|optimi[sz]ed|gathered|identified|created|built|maintained"
     r"|configured|installed|troubleshot|resolved|delivered|coordinated"
     r"|performed|conducted|provided|prepared|established|automated|migrated"
-    r"|deployed|tested|documented|monitored|handled|operated)\b",
+    r"|deployed|tested|documented|monitored|handled|operated|acted)\b",
     re.I,
 )
 # A "SKILLS" heading commonly holds real skill lists in one part of the
@@ -98,6 +98,12 @@ ACTION_VERB_RE = re.compile(
 # deliberately not caught: it opens with a common verb that just as often
 # names a tool used ("Used Python for...") as a responsibility performed,
 # so it is left as a skill rather than guessed at.
+#
+# A "LANGUAGES" heading gets the same treatment: a two-column CV template
+# can place a job's duty bullets in a text box whose reading-order position
+# lands them right after the language list with no heading of their own
+# ("English Malayalam" followed immediately by "Coordinated and streamlined
+# hospital services..."). Same scramble, same fix.
 #
 # A course/certificate/internship one-liner under the same heading
 # ("React.Js Course - Udemy", "Certified Digital Marketing Manager -
@@ -116,7 +122,7 @@ TRAINING_LINE_RE = re.compile(
 )
 
 SCOPED_RULES: list[tuple[re.Pattern, str, set[str]]] = [
-    (ACTION_VERB_RE, "previous_employment", {"qualifications", "skills"}),
+    (ACTION_VERB_RE, "previous_employment", {"qualifications", "skills", "language_proficiency"}),
     (TRAINING_LINE_RE, "qualifications", {"skills"}),
 ]
 
@@ -124,6 +130,7 @@ ROUTABLE_SOURCE_SECTIONS = {
     "academic_leadership", "committees", "knowledge_exchange", "associations",
     "centres_of_excellence", "editorial_roles", "awards", "teaching_learning",
     "qualifications", "present_employment", "previous_employment", "skills",
+    "language_proficiency",
 }
 
 # Never move an item OUT of a section the CV named explicitly, and never

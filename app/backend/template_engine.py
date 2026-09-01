@@ -187,9 +187,15 @@ def _populate_letterhead(doc_xml: str, items_by_section: dict[str, list[dict]]) 
     idx = 0
     for para in paras:
         text = _para_text(para)
-        if text == "FULL NAME" and full_name:
-            new_para = _replace_first_run_text(para, full_name)
-            new_table_xml = new_table_xml.replace(para, new_para, 1)
+        if text == "FULL NAME":
+            # idx must advance here regardless of whether a name was found --
+            # job_title/contact/email are independently extracted fields and
+            # must not go unwritten (leaving the template's own "how to fill
+            # this in" instructions in a document handed to HR) just because
+            # this one field came up empty.
+            if full_name:
+                new_para = _replace_first_run_text(para, full_name)
+                new_table_xml = new_table_xml.replace(para, new_para, 1)
             idx = 1
             continue
         # Each of these three fields replaces the template's own "how to
@@ -200,9 +206,24 @@ def _populate_letterhead(doc_xml: str, items_by_section: dict[str, list[dict]]) 
         # the presence check moved; which value fills the line still comes
         # from the classifier exactly as before.
         if idx == 1 and text.lower().startswith("job title"):
-            new_text = f"Job title: {job_title}" if job_title else ""
-            new_para = _replace_first_run_text(para, new_text)
-            new_table_xml = new_table_xml.replace(para, new_para, 1)
+            if job_title and "\n" in job_title:
+                # Two real posts glued into one source line by rule_classifier's
+                # own detection get split back apart here into one paragraph
+                # per title -- only the first carries the "Job title:" label,
+                # matching how a formatter's multi-line result is already
+                # rendered for body content (see _populate_sections).
+                title_lines = [t for t in job_title.split("\n") if t.strip()]
+                new_paras = [
+                    _replace_first_run_text(
+                        para, f"Job title: {t}" if i == 0 else t
+                    )
+                    for i, t in enumerate(title_lines)
+                ]
+                new_table_xml = new_table_xml.replace(para, "".join(new_paras), 1)
+            else:
+                new_text = f"Job title: {job_title}" if job_title else ""
+                new_para = _replace_first_run_text(para, new_text)
+                new_table_xml = new_table_xml.replace(para, new_para, 1)
             idx = 2
             continue
         if idx == 2 and text.lower().startswith("contact"):

@@ -23,7 +23,7 @@
     <div class="dropzone" id="dropzone">
       <p><strong>Click to choose a file</strong> or drag one here</p>
       <p class="muted">DOCX or PDF, up to 25 MB. Scanned/image-only PDFs aren't supported yet.</p>
-      <input type="file" id="fileInput" accept=".docx,.pdf" multiple>
+      <input type="file" id="fileInput" accept=".docx,.pdf" multiple aria-label="Choose CV file(s) to upload">
     </div>
     <div id="uploadError"></div>
     <div id="uploadStatus" class="muted" style="margin-top:0.8rem;"></div>
@@ -33,7 +33,7 @@
     <h2>Auto-approval setting</h2>
     <p class="muted">Items below this confidence always wait for a person to review them. Applies to CVs uploaded from now on — a CV already sitting in review is unaffected.</p>
     <div class="settings-row">
-      <input type="number" id="thresholdInput" min="0.01" max="2" step="0.01">
+      <input type="number" id="thresholdInput" min="0.01" max="2" step="0.01" aria-label="Auto-approval confidence threshold">
       <button class="btn-secondary btn-sm" id="saveThresholdBtn">Save</button>
       <span class="muted" id="thresholdSaved" style="display:none;">Saved.</span>
     </div>
@@ -206,7 +206,31 @@ async function loadUnmappedHeadingsSummary() {
   const rowsEl = document.getElementById("unmappedHeadingsRows");
   try {
     if (!sectionDefsForTeach.length) sectionDefsForTeach = await apiFetch("/api/sections");
-    const rows = await apiFetch("/api/unmapped-headings-summary");
+    const unmapped = await apiFetch("/api/unmapped-headings-summary");
+    // Build spec §14: HR corrections already made, on other CVs, become a
+    // pre-filled suggestion here rather than a blank "pick a section"
+    // task -- "HR has mapped similar headings to X. Save this mapping?"
+    // Never applied automatically; still requires the same explicit
+    // "Teach this heading" click as any other row. Fetched independently
+    // so one endpoint failing (e.g. on a fresh install with no correction
+    // history yet) never hides the other's rows.
+    let suggestions = [];
+    try { suggestions = await apiFetch("/api/heading-mapping-suggestions"); } catch (_) {}
+    const suggestionByContext = new Map(suggestions.map(s => [s.context.trim().toLowerCase(), s]));
+
+    // Union, not a merge-into: a heading HR has ALREADY corrected every
+    // known instance of has zero currently-unmapped occurrences left, so
+    // it would never appear in `unmapped` at all -- without adding it as
+    // its own row here, a fully-resolved pattern (arguably the strongest
+    // possible signal for a suggestion) would never be visible anywhere.
+    const rows = unmapped.map(r => ({ ...r, isSuggestionOnly: false }));
+    const unmappedContexts = new Set(unmapped.map(r => r.context.trim().toLowerCase()));
+    for (const s of suggestions) {
+      if (!unmappedContexts.has(s.context.trim().toLowerCase())) {
+        rows.push({ context: s.context, cv_count: s.cv_count, isSuggestionOnly: true });
+      }
+    }
+
     if (!rows.length) { card.style.display = "none"; return; }
     card.style.display = "block";
 
@@ -215,21 +239,32 @@ async function loadUnmappedHeadingsSummary() {
       .map(s => `<option value="${s.key}">${s.label}</option>`)
       .join("");
 
-    rowsEl.innerHTML = rows.map((r, i) => `
+    rowsEl.innerHTML = rows.map((r, i) => {
+      const suggestion = suggestionByContext.get(r.context.trim().toLowerCase());
+      const suggestedLabel = suggestion
+        ? sectionDefsForTeach.find(s => s.key === suggestion.suggested_section)?.label : null;
+      const countLabel = r.isSuggestionOnly
+        ? `already corrected on ${r.cv_count} CV${r.cv_count === 1 ? "" : "s"}`
+        : `on ${r.cv_count} CV${r.cv_count === 1 ? "" : "s"}`;
+      return `
       <div class="teach-row" data-index="${i}">
         <span class="teach-heading-label"></span>
-        <span class="muted">on ${r.cv_count} CV${r.cv_count === 1 ? "" : "s"}</span>
+        <span class="muted">${countLabel}</span>
         <span class="muted">always file under</span>
-        <select class="teach-select">${sectionOptions}</select>
+        <select class="teach-select" aria-label="File this heading under">${sectionOptions}</select>
         <button class="btn-secondary btn-sm act-teach-dashboard-heading">Teach this heading</button>
         <span class="teach-confirm muted" style="display:none;"></span>
+        ${suggestedLabel ? `<span class="muted" style="flex-basis:100%;">HR has mapped similar headings to <strong>${suggestedLabel}</strong> on ${suggestion.cv_count} other CV${suggestion.cv_count === 1 ? "" : "s"} (${Math.round(suggestion.agreement * 100)}% agreement). Save this mapping?</span>` : ""}
       </div>
-    `).join("");
+    `;
+    }).join("");
     // Heading text set as textContent, not baked into the template string --
     // same reasoning as review.html's teach panel: never treat CV-sourced
     // text as markup.
     rowsEl.querySelectorAll(".teach-row").forEach((row, i) => {
       row.querySelector(".teach-heading-label").textContent = `“${rows[i].context}”`;
+      const suggestion = suggestionByContext.get(rows[i].context.trim().toLowerCase());
+      if (suggestion) row.querySelector(".teach-select").value = suggestion.suggested_section;
     });
     rowsEl.querySelectorAll(".act-teach-dashboard-heading").forEach((btn, i) =>
       btn.addEventListener("click", () => onTeachDashboardHeading(btn, rows[i].context)));

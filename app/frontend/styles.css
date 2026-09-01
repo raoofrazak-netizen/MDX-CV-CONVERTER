@@ -20,6 +20,19 @@
 
 * { box-sizing: border-box; }
 
+/* Keyboard-only focus ring, applied to every interactive element -- before
+   this, the command bar's input was the one place that got a visible focus
+   state at all; buttons, links, and every other field fell back to browser
+   default (or nothing, depending on the browser), which a keyboard-only or
+   low-vision reviewer can't reliably see against this system's mostly-white
+   surfaces. :focus-visible (not :focus) so mouse clicks stay ring-free. */
+a:focus-visible, button:focus-visible, .btn:focus-visible,
+input:focus-visible, select:focus-visible, textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--mdx-red);
+  outline-offset: 2px;
+}
+
 body {
   margin: 0;
   font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
@@ -147,6 +160,14 @@ td { padding: 0.6rem; border-bottom: 1px solid var(--border); vertical-align: mi
   padding: 0.5rem 0.7rem; margin-top: 0.3rem; border-radius: 4px;
 }
 .item-row .source summary { cursor: pointer; font-weight: 600; color: var(--text-soft); }
+/* Reuses the "edited" accent (#1E5A9A family) rather than inventing a new
+   color: an AI suggestion is the same kind of fact as an "edited" pill --
+   a decision distinct from the raw rule-based classification -- not a new
+   status concept needing its own token. */
+.item-row .ai-suggestion, .item-row .ai-split-suggestion {
+  font-size: 0.85rem; background: var(--bg); border-left: 3px solid #1E5A9A;
+  padding: 0.6rem 0.8rem; margin-top: 0.5rem; border-radius: 4px;
+}
 .item-row .flags { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.3rem; }
 .item-row .flag { font-size: 0.72rem; background: var(--warn-bg); color: var(--warn); padding: 0.12rem 0.5rem; border-radius: 10px; }
 .item-row .actions { display: flex; gap: 0.4rem; }
