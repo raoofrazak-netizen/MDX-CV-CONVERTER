@@ -23,6 +23,7 @@ ever trim or merge whitespace around real line content -- never rewrite it).
 """
 import re
 from collections import Counter
+from datetime import date
 
 import identifiers
 import routing
@@ -74,7 +75,15 @@ MONTH_WORD = (
 # 2-digit ABBREVIATED end year (the "2024-26" case), turning a real
 # "12/2022" into a fabricated "2112" and leaving "/2022" behind as a bogus
 # job title.
-_DATE_PART = rf"(?:{MONTH_WORD}\s+|\d{{1,2}}/)?\d{{4}}"
+#
+# The trailing "-MM" is the same fix for the OTHER common numeric-month
+# convention ("2020-09"). Without it, "2023-09 - Current Assistant
+# Professor..." matched group(1) as just "2023", leaving "-09" to be misread
+# as a 2-digit end year (fabricating "2109" until _extract_employment_fields'
+# own guard caught it) -- and because the real end marker "Current" was
+# never reached, it was left stuck to the front of the job title instead of
+# recognised as the open-ended marker it is.
+_DATE_PART = rf"(?:{MONTH_WORD}\s+|\d{{1,2}}/)?\d{{4}}(?:-\d{{2}})?"
 YEAR_RANGE_RE = re.compile(
     # Both ends must allow a leading month. CVs very often write
     # "June 2024 - July 2025", and a year-only pattern consumes just
@@ -98,7 +107,15 @@ DATE_REMNANT_RE = re.compile(r"^[\s|,;:.\-–—()]*\d{0,4}[\s|,;:.\-–—()]*$
 # "2022 – 25", "| 2019-23". Such a line is always the wrapped tail of the
 # entry above it, never the start of a new one.
 DATE_ONLY_RE = re.compile(
-    r"^[\s|,()\-–—]*\d{4}\s*(?:[-–—]\s*(?:\d{2,4}|present|current|onwards?))?[\s|,()\-–—.]*$",
+    # A start year may itself carry a "-MM" month suffix ("2023-09") --
+    # without \d{4}(?:-\d{2})? as one atomic unit, "2023-09 - Current" was
+    # read as year "2023", separator, end-year "09", leaving " - Current"
+    # unconsumed and the whole line unrecognised as a bare date at all. It
+    # then fell through to ordinary employment-field parsing, which
+    # fabricated a fake entry titled "Current" with a garbled end year.
+    r"^[\s|,()\-–—]*\d{4}(?:-\d{2})?\s*"
+    r"(?:[-–—]\s*(?:\d{4}(?:-\d{2})?|\d{2}|present|current|onwards?))?"
+    r"[\s|,()\-–—.]*$",
     re.IGNORECASE,
 )
 
@@ -224,7 +241,7 @@ SYNONYM_HEADINGS: dict[str, list[str]] = {
 }
 
 TITLE_KEYWORDS = [
-    "professor", "lecturer", "dean", "director", "head of", "chair,",
+    "professor", "lecturer", "dean", "director", "head of", "chair",
     "coordinator", "researcher", "fellow", "instructor",
     # non-academic roles, so job-title detection isn't blind on a generic CV
     "engineer", "manager", "specialist", "administrator", "analyst",
@@ -232,6 +249,21 @@ TITLE_KEYWORDS = [
     "supervisor", "developer", "designer", "architect", "support",
     "teacher", "tutor", "nurse", "assistant", "intern", "clerk", "advisor",
 ]
+
+# A plain "kw in text.lower()" substring check false-positives badly --
+# "intern" (meant to catch the job title "Intern") matches inside
+# "international", turning an ordinary duty sentence ("...at national and
+# international conferences...") into a job-title candidate. Word-boundary
+# matching is the general fix, used everywhere TITLE_KEYWORDS is checked
+# against a candidate line rather than the bare substring test.
+TITLE_KEYWORD_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(kw) for kw in TITLE_KEYWORDS) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _has_title_keyword(text: str) -> bool:
+    return bool(TITLE_KEYWORD_RE.search(text))
 
 # Organisation and place words. A person is never called "Northwood
 # Elementary School", but such a line passes every structural test a name
@@ -311,7 +343,11 @@ def _looks_like_job_title(text: str) -> bool:
     if stripped.endswith(":") or _find_heading_key(stripped) is not None:
         return False
     # Real titles are noun phrases; sentence-like punctuation means prose.
-    return not re.search(r"[.;?!]\s", stripped)
+    # Checked both mid-string ("...sentence. Another...") and at the very
+    # end ("...topics.") -- a duty line that happens to be a single
+    # sentence has no internal ". " to catch, only a full stop as its very
+    # last character, which the mid-string-only check let straight through.
+    return not re.search(r"[.;?!](?:\s|$)", stripped)
 
 
 def _is_junk_line(text: str) -> bool:
@@ -460,7 +496,13 @@ NAME_BLOCKLIST = {
 # common on this system's own CVs, and the previous pattern rejected the
 # WHOLE name over it, silently falling back to a worse-guessed name (once,
 # from the person's own email address) instead.
-_NAME_TOKEN = r"[^\W\d_]+(?:['\-][^\W\d_]+)*"
+#
+# A trailing period is also allowed on any token, for a middle initial
+# ("Seada A. Kassie") -- without it the whole line failed to match at all
+# (the period sits right after "A" with no token able to consume it), so
+# the real name was never even offered as a candidate, and full_name came
+# up completely empty rather than just lower-confidence.
+_NAME_TOKEN = r"[^\W\d_]+(?:['\-][^\W\d_]+)*\.?"
 NAME_LINE_RE = re.compile(
     rf"^{_NAME_TOKEN}(?:\s+{_NAME_TOKEN}){{1,2}}$", re.UNICODE
 )
@@ -489,7 +531,7 @@ def _looks_like_person_name(line: str) -> bool:
     # role in the same prominent position a name would occupy ("FIRST GRADE
     # TEACHER"), where it passes every shape test a real name would.
     lowered = text.lower()
-    if any(kw in lowered for kw in TITLE_KEYWORDS):
+    if _has_title_keyword(lowered):
         return False
     if any(kw in lowered for kw in ORG_KEYWORDS):
         return False
@@ -794,7 +836,7 @@ def _is_title_with_date_line(text: str) -> bool:
     head = text[: match.start()].strip(" ,-–—")
     if not head or not _looks_like_job_title(head):
         return False
-    return any(kw in head.lower() for kw in TITLE_KEYWORDS)
+    return _has_title_keyword(head.lower())
 
 
 def _forces_new_item(line: str) -> bool:
@@ -1166,17 +1208,42 @@ def _group_into_items(body_lines: list[str], section_key: str | None = None) -> 
     cleaned = [" ".join(item.split()) for item in items if item.strip()]
 
     # Final sweep: fold any item that turned out to be nothing but a date
-    # back into the entry above it. Layout-heavy documents (text boxes,
+    # back into the entry beside it. Layout-heavy documents (text boxes,
     # multi-column PDFs) emit a bare "2012" as its own run of text, and on
     # its own it is meaningless -- it belongs to the qualification or role
-    # it sits beside. Anything stranded at the very start has no entry to
-    # attach to and is dropped rather than published as a lone number.
+    # it sits beside.
+    #
+    # An OPEN-ENDED date stranded at the very start (nothing above it yet)
+    # is held and attached FORWARD instead of dropped: a two-column layout
+    # commonly puts the date column ahead of the title/employer column for
+    # the section's first entry ("2023-09 - Current" / "Assistant
+    # Professor, Middlesex University..."), and that first entry is very
+    # often the person's CURRENT role -- silently losing its date range,
+    # and with it the only signal that marks it as ongoing, is worse than
+    # the old "drop it" behaviour was trying to avoid.
+    #
+    # Deliberately narrow to the open-ended case (present/current/onwards):
+    # a bare closed year like "2012" carries no such signal and is far more
+    # likely orphaned qualification-year debris than a role's start date --
+    # attaching it forward unconditionally glued a stray "2012" onto a
+    # completely unrelated item several lines later on a real CV, which
+    # the verbatim guard then rightly discarded as non-adjacent, fabricated
+    # text. A closed bare date at the very start is still just dropped, as
+    # before.
     merged: list[str] = []
+    pending_lead_date: str | None = None
     for item in cleaned:
         if DATE_ONLY_RE.match(item):
             if merged:
                 merged[-1] = f"{merged[-1]} {item}".strip()
+            elif PRESENT_ROLE_RE.search(item):
+                pending_lead_date = (
+                    f"{pending_lead_date} {item}".strip() if pending_lead_date else item
+                )
             continue
+        if pending_lead_date:
+            item = f"{pending_lead_date} {item}".strip()
+            pending_lead_date = None
         merged.append(item)
     return merged
 
@@ -1668,7 +1735,7 @@ def _name_corroborated_by_filename(cv_text: str, source_document: str) -> str | 
         # Resume-Sample.docx") anchors on an occupation, and the phrase it
         # finds in the document is a job title, not a name. No one is called
         # "Elementary Teacher".
-        if any(kw in candidate.lower() for kw in TITLE_KEYWORDS):
+        if _has_title_keyword(candidate.lower()):
             continue
         return candidate
     return None
@@ -1943,7 +2010,7 @@ def _extract_letterhead(
             continue
         if (
             text != name_line
-            and any(kw in low for kw in TITLE_KEYWORDS)
+            and _has_title_keyword(low)
             and not EMAIL_RE.search(text)
             and _looks_like_job_title(text)
         ):
@@ -2061,7 +2128,7 @@ def _split_employment_and_practice_zones(
             restarts_job = (
                 YEAR_RANGE_RE.search(stripped)
                 and BARE_TITLE_LINE_RE.match(next_line)
-                and any(kw in next_line.lower() for kw in TITLE_KEYWORDS)
+                and _has_title_keyword(next_line.lower())
             )
             if restarts_job:
                 if current:
@@ -2117,7 +2184,7 @@ def _employment_body_entries(
             if (
                 match and BARE_TITLE_LINE_RE.match(stripped)
                 and _looks_like_job_title(stripped)
-                and any(kw in stripped.lower() for kw in TITLE_KEYWORDS)
+                and _has_title_keyword(stripped.lower())
             ):
                 next_stripped = body_items[i + 1].strip()
                 end_raw = (match.group("end") or "").strip()
@@ -2158,10 +2225,19 @@ def _extract_employment_fields(line: str, employer_key: str) -> dict[str, Any]:
         end = end_year_match.group(0)
     elif len(end_raw) == 2 and end_raw.isdigit():
         # "2024-26" -> 2026, carried across a century boundary if needed
-        # ("1999-02" is 1999-2002, not 1999-1902).
+        # ("1999-02" is 1999-2002, not 1999-1902). Same fabrication risk as
+        # normalize_date_range's identical logic: "2020-09" (ISO year-month,
+        # "09" = September) is shape-identical to a short end year, and
+        # wrapping it a century forward produces a nonsense year decades in
+        # the future ("2109"). Guarded the same way -- see that function's
+        # comment for the full reasoning.
         century, start_year = int(start) // 100, int(start)
         end_year = century * 100 + int(end_raw)
-        end = str(end_year + 100 if end_year < start_year else end_year)
+        if end_year < start_year:
+            wrapped = end_year + 100
+            end = str(wrapped) if wrapped <= date.today().year + 5 else ""
+        else:
+            end = str(end_year)
     else:
         end = ""
 
@@ -2231,13 +2307,13 @@ def _extract_employment_fields(line: str, employer_key: str) -> dict[str, Any]:
     # convention; only the immediately preceding word is folded in too
     # (covers "Senior Lecturer", "Assistant Director" -- the common
     # one-modifier case), not an open-ended backward search.
-    last_has_title_kw = len(parts) > 1 and any(kw in parts[-1].lower() for kw in TITLE_KEYWORDS)
-    first_has_title_kw = len(parts) > 1 and any(kw in parts[0].lower() for kw in TITLE_KEYWORDS)
+    last_has_title_kw = len(parts) > 1 and _has_title_keyword(parts[-1])
+    first_has_title_kw = len(parts) > 1 and _has_title_keyword(parts[0])
     if last_has_title_kw and not first_has_title_kw:
         tail_words = parts[-1].split()
         kw_idx = next(
             (i for i, w in enumerate(tail_words)
-             if any(kw in w.lower() for kw in TITLE_KEYWORDS)),
+             if _has_title_keyword(w.lower())),
             None,
         )
         title_start = max(0, kw_idx - 1) if kw_idx and re.match(r"^[A-Z][a-z]+$", tail_words[kw_idx - 1]) else kw_idx
@@ -2284,11 +2360,11 @@ def _guess_title_from_employment_text(text: str) -> str | None:
     substring of that line -- just a comma-delimited segment of it -- so
     the no-fabrication rule holds; the low confidence this gets called
     with is what flags it for HR to confirm rather than trust outright."""
-    low = text.lower()
     for kw in TITLE_KEYWORDS:
-        if kw in low:
+        kw_re = re.compile(r"\b" + re.escape(kw) + r"\b", re.IGNORECASE)
+        if kw_re.search(text):
             for segment in text.split(","):
-                if kw in segment.lower():
+                if kw_re.search(segment):
                     # A merged item can drag a whole paragraph of duties
                     # into one "segment" when the source CV has no bullet
                     # marker on its responsibility lines -- stop at the
@@ -2317,7 +2393,19 @@ def normalize_date_range(text: str) -> str:
         start_year = int(century + start_yy)
         end_year = int(century) * 100 + int(end_yy)
         if end_year < start_year:  # e.g. 1999-02 spans the century boundary
-            end_year += 100
+            wrapped = end_year + 100
+            # This same 4+2-digit shape is indistinguishable from an ISO
+            # "YYYY-MM" date ("2020-09" = September 2020) using local text
+            # alone -- and wrapping THAT by a century produces a nonsense
+            # year like 2109, decades in the future. A genuine short-year
+            # range never legitimately wraps past a few years from today
+            # (the "1999-02" -> "2002" case lands in the past, not the
+            # future); when it would, this is almost certainly a month
+            # suffix, not a year -- leave the original text untouched
+            # rather than fabricate a date.
+            if wrapped > date.today().year + 5:
+                return m.group(0)
+            end_year = wrapped
         return f"{start_year}{dash}{end_year}"
 
     return SHORT_YEAR_RANGE_RE.sub(_expand, text)
@@ -2993,7 +3081,7 @@ def _promote_present_role(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not PRESENT_ROLE_RE.search(text):
             continue
         role = _role_text_before_dates(text)
-        if not any(kw in role.lower() for kw in TITLE_KEYWORDS):
+        if not _has_title_keyword(role.lower()):
             continue
         if not _looks_like_job_title(role):
             continue

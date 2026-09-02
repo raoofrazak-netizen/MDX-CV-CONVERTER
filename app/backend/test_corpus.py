@@ -61,8 +61,10 @@ from unmapped import UNMAPPED_HEADING
 
 CORPUS_DIRS = [
     Path(r"C:\Users\test\Downloads"),
-    Path(r"C:\Users\test\Downloads\New folder"),
-    Path(r"C:\Users\test\Downloads\New folder\New folder"),
+    Path(r"C:\Users\test\Downloads\testnew"),
+    Path(r"C:\Users\test\Downloads\testnew\New folder"),
+    Path(r"C:\Users\test\Downloads\testnew\new folder cv"),
+    Path(r"C:\Users\test\Downloads\testnew\Staff CV"),
 ]
 # Generated outputs and the blank template are inputs to nothing.
 SKIP_PATTERNS = (

@@ -777,6 +777,39 @@ every job entry into Biography.
   or split, whenever it resolves to a real institution keyword; a genuine
   department name with no institution word in it is left untouched.
 
+### 2026-09-02 additions — a scrambled two-column résumé, and a standing data-integrity bug
+
+Full detail and every defect table in `FIXLOG.md`. The corpus is now 38
+CVs (`test_corpus.py`'s `CORPUS_DIRS` needed updating to match where the
+sample CVs now live — a user reorganisation, not a code change).
+
+- **A job-duty sentence could become the job title.** "intern" (a real
+  keyword, for the title "Intern") matched as a bare substring inside
+  "**intern**ational" — turning an ordinary sentence about international
+  conferences into a fake title candidate. Fixed with word-boundary
+  matching everywhere `TITLE_KEYWORDS` is checked.
+- **A middle initial with a period broke name detection completely** —
+  "Seada A. Kassie" produced an entirely empty `full_name`, not just a
+  lower-confidence one, because nothing in the name-shape pattern could
+  consume the period on "A.".
+- **Impossible fabricated years** ("2020 – 2109") from an ISO year-month
+  date ("2020-09" = September 2020) being misread as an abbreviated short
+  year-range end and wrapped a century forward — found in two independent
+  implementations of the same logic, both now guarded against landing
+  implausibly far in the future.
+- **A currently-held role was filed under Previous Employment with no
+  date at all**, instead of Present Employment — a two-column layout put
+  the date ("2023-09 - Current") on its own line ahead of the title, and
+  it was silently dropped rather than carried forward to the entry it
+  belonged to.
+- **A standing data-integrity bug, not a code defect**: a custom heading
+  mapping taught during this session's own earlier testing incorrectly
+  pointed "SUMMARY" at the `full_name` section instead of `biography`,
+  silently corrupting the letterhead of every CV with a "Summary" heading
+  processed since. Found by comparing a clean isolated test against the
+  live server's different result on the identical input — deleted via the
+  existing `/api/heading-mappings` endpoint; no code was wrong.
+
 ### Review-screen safety fixes (frontend, no classifier/generation risk)
 
 - **Deleting an item was instant and permanent, with no confirmation** —
