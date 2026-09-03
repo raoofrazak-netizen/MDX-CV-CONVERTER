@@ -271,6 +271,7 @@ TITLE_KEYWORDS = [
     "consultant", "technician", "executive", "officer", "associate",
     "supervisor", "developer", "designer", "architect", "support",
     "teacher", "tutor", "nurse", "assistant", "intern", "clerk", "advisor",
+    "trainee",
 ]
 
 # A plain "kw in text.lower()" substring check false-positives badly --
@@ -2497,6 +2498,36 @@ def _extract_employment_fields(line: str, employer_key: str) -> dict[str, Any]:
     # "…, August 2010 - Present" leaves the month stranded on the role side
     # once the year match is removed; it belongs to the date, not the employer.
     before = TRAILING_MONTH_RE.sub("", before).strip(" ,-–—")
+
+    # "Title (Date) Employer" -- the date sits inside its own parentheses,
+    # title immediately before the "(" and employer immediately after the
+    # ")", with no comma anywhere on either side ("Adjunct Faculty (Jan
+    # 2026-Present) Middlesex University Dubai"). Neither side is a
+    # comma-joined "Title, Employer" pair here -- the split falls across
+    # the date itself -- so the general logic below (built entirely around
+    # finding that pair on ONE side) has no way to recognise it: "after"
+    # ("Middlesex University Dubai") reads as short and clean, exactly
+    # like real role text would, and was being taken as the whole
+    # "Title, Employer" source with no comma left to split on, so the
+    # entire employer name was stored as the TITLE and the real title
+    # (sitting on "before", never even considered) was discarded. Detected
+    # narrowly: both sides present, single clean phrases with no comma of
+    # their own, and the date literally wrapped in "(" ")" in the source
+    # -- a shape no other convention this function handles produces, so
+    # there is no ambiguity about which side is which.
+    if (
+        line[:m.start()].rstrip().endswith("(")
+        and line[m.end():].lstrip().startswith(")")
+        and before and "," not in before and not DATE_REMNANT_RE.match(before)
+        and len(before) <= 100 and not re.search(r"[.!?]\s+\S", before)
+        and after and "," not in after and not DATE_REMNANT_RE.match(after)
+        and len(after) <= 100 and not re.search(r"[.!?]\s+\S", after)
+    ):
+        fields = {"title": before, "start_date": start, "end_date": end}
+        if ongoing:
+            fields["is_current"] = True
+        fields[employer_key] = after
+        return fields
     # Whichever side holds the role, ignoring a side that is only leftover
     # date debris -- otherwise a stray "26" becomes the person's job title.
     # But a merged item can carry the ENTIRE narrative paragraph after the
@@ -2949,6 +2980,17 @@ def _extract_qualification_fields(text: str) -> dict[str, Any]:
         # ("... Art Teacher, National") dangling on the end of the subject.
         end = institution.start() if institution and institution.start() > degree_match.end() else len(text)
         after = text[degree_match.end():end]
+        # A degree classification sits in its own parentheses directly after
+        # the degree name ("BSc (Hons.) Information Technology") -- stripped
+        # whole here, before the general punctuation strip below only trims
+        # the OUTER edges of the string. Left in, removing just the leading
+        # "(" leaves the closing ")" stranded in the MIDDLE of the result
+        # ("Hons.) Information Technology"), which then fails
+        # _is_plausible_subject's balanced-bracket guard and discards a real
+        # subject entirely -- worse than the dangling bracket it exists to
+        # catch, since the fallback here is no subject at all rather than
+        # the verbatim source line.
+        after = re.sub(r"^\s*\([^()]{0,20}\)\s*", "", after)
         subject = after.strip(" ,;:.-–—()")
         # "Bachelor's degree in X": the possessive "'s" sits between the
         # matched degree word and the apostrophe, which \b treats as a word
