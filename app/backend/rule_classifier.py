@@ -27,6 +27,7 @@ from datetime import date
 
 import identifiers
 import routing
+from extraction import HEADER_FOOTER_MARKER
 from formatting import _employment_line
 from pathlib import Path
 from typing import Any
@@ -3386,9 +3387,29 @@ def _biography_from_preamble(
 
 
 def classify_rule_based(cv_text: str, source_document: str) -> list[dict[str, Any]]:
-    lines = cv_text.splitlines()
+    raw_lines = cv_text.splitlines()
 
-    running_headers = _find_running_headers(lines)
+    # A line extraction.py tagged as sourced from a DOCX header/footer (see
+    # HEADER_FOOTER_MARKER's docstring) is page furniture by construction,
+    # not body content -- but unlike a PDF's repeated running header, it
+    # was only ever read once, so _find_running_headers' repeat-count check
+    # can never recognise it on its own. Folded into the SAME running_headers
+    # set _find_running_headers already produces: stripped from body_lines
+    # exactly like any other running header, and still offered to
+    # _extract_letterhead below, so a genuine identifier or contact detail
+    # that happens to sit in a footer is not lost, only kept out of whatever
+    # section heading happens to be physically last in the document.
+    header_footer_lines = {
+        " ".join(l[len(HEADER_FOOTER_MARKER):].split())
+        for l in raw_lines if l.startswith(HEADER_FOOTER_MARKER)
+    }
+    lines = [
+        l[len(HEADER_FOOTER_MARKER):] if l.startswith(HEADER_FOOTER_MARKER) else l
+        for l in raw_lines
+    ]
+    cv_text = "\n".join(lines)
+
+    running_headers = _find_running_headers(lines) | header_footer_lines
     body_lines = [l for l in lines if " ".join(l.split()) not in running_headers]
     body_lines = _merge_wrapped_headings(body_lines)
     body_lines = _merge_split_letter_spaced_headings(body_lines)

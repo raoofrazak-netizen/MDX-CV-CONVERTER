@@ -1,6 +1,6 @@
 """Regression tests for real data-loss bugs found deep-auditing a genuine
 staff CV already written in the MDX template itself, against its portal
-conversion (2026-09-03). Eight distinct bug classes, all traced to
+conversion (2026-09-03). Nine distinct bug classes, all traced to
 grouping/boundary detection in _group_into_items and field-parsing in
 _structure_grants:
 
@@ -44,11 +44,22 @@ _structure_grants:
      OTHER INVITED ROLES" -- not even one of the MDX template's own named
      sections -- was glued onto a press-coverage bullet this way and
      disappeared into it entirely.
+  9. A DOCX section's header/footer XML is read exactly ONCE by
+     python-docx regardless of how many pages the document actually has,
+     unlike a PDF (extracted page by page, so a repeated running header
+     naturally shows up several times and an existing repeat-count check
+     recognises it as page furniture). A footer like "AFROZ NAWAF |
+     ACADEMIC CV - 1" therefore only ever appears once in the extracted
+     text, the repeat-count check can never fire, and -- exactly like the
+     hyperlink-target lines in bug 7 -- it lands as if it were real body
+     content of whatever section heading happens to be physically LAST in
+     the document.
 
 Run directly: python test_afroz_grouping_and_grants.py
 """
 import identifiers
 import rule_classifier as rc
+from extraction import HEADER_FOOTER_MARKER
 
 
 # --- Bug 1: unbulleted awards all welding into one item ----------------
@@ -256,6 +267,36 @@ def test_ordinary_three_word_acronym_run_inside_a_normal_sentence_is_left_alone(
     line = "Certified in AWS EC2 S3 deployment and cloud infrastructure management."
     pieces = rc._split_embedded_heading_runs([line])
     assert len(pieces) == 1
+
+
+# --- Bug 9: a once-only DOCX footer landing under the wrong section -----
+
+def test_header_footer_marked_line_is_stripped_from_body_and_produces_no_stray_item():
+    text = (
+        "PROFESSIONAL PROFILES, LINKS, AND IDENTIFIERS\n"
+        "Website: https://www.afroz.xyz\n"
+        f"{HEADER_FOOTER_MARKER}AFROZ NAWAF | ACADEMIC CV - 1\n"
+    )
+    items = rc.classify_rule_based(text, "test.docx")
+    profile_items = [it for it in items if it["section"] == "profiles_links"]
+    assert any(it["fields"].get("url") == "https://www.afroz.xyz" for it in profile_items)
+    assert not any("ACADEMIC CV" in it["source_text"] for it in profile_items)
+    # The marker itself must never leak into a stored source_text.
+    assert not any(HEADER_FOOTER_MARKER in it["source_text"] for it in items)
+
+
+def test_header_footer_line_does_not_break_full_name_detection():
+    # A genuine running-header contact strip must still reach the
+    # letterhead extractor -- this fix must only stop the WRONG,
+    # position-accidental section assignment, not remove the line from
+    # consideration entirely.
+    text = (
+        f"{HEADER_FOOTER_MARKER}Jane Doe | jane.doe@example.com\n"
+        "QUALIFICATIONS\n"
+        "PhD, Physics, Example University (2015)\n"
+    )
+    items = rc.classify_rule_based(text, "test.docx")
+    assert any(it["section"] == "full_name" and "Jane Doe" in it["fields"].get("value", "") for it in items)
 
 
 if __name__ == "__main__":

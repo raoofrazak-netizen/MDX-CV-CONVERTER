@@ -13,19 +13,19 @@ cd app/backend && python test_corpus.py
 
 ---
 
-## 2026-09-03 — A genuine staff CV written directly in the MDX template: nine real data-loss defects found by deep-auditing source vs. converted output
+## 2026-09-03 — A genuine staff CV written directly in the MDX template: ten real data-loss defects found by deep-auditing source vs. converted output
 
 Requested explicitly: a side-by-side audit of a real converted CV against
 its source, checking for missing/corrupted data rather than waiting for it
-to surface CV-by-CV. Found nine distinct bugs — six in grouping/boundary
+to surface CV-by-CV. Found ten distinct bugs — six in grouping/boundary
 detection and grants field-parsing, one in qualifications/skills routing,
-one in profile-link recognition, and one in how a heading glued mid-
-paragraph onto unrelated content was (not) separated back out — none in
-extraction itself, which read every byte of the source correctly.
-Regression tests in `app/backend/test_afroz_grouping_and_grants.py`.
-Suite: 54/59 passing throughout (5 pre-existing failures, confirmed via
-`git stash` to predate this session's changes, unrelated to any of these
-fixes).
+one in profile-link recognition, one in how a heading glued mid-paragraph
+onto unrelated content was (not) separated back out, and one where a
+DOCX-only footer landed under the wrong section — none in extraction
+itself, which read every byte of the source correctly. Regression tests in
+`app/backend/test_afroz_grouping_and_grants.py`. Suite: 54/59 passing
+throughout (5 pre-existing failures, confirmed via `git stash` to predate
+this session's changes, unrelated to any of these fixes).
 
 | Defect | Cause | Fix |
 |---|---|---|
@@ -38,6 +38,8 @@ fixes).
 | A bare certification ("Fusion VFX") wrongly filed under a phantom "Skills" section instead of staying in Qualifications alongside its siblings | The per-item qualifications classification check required a degree, institution, or year signal before keeping an item in `qualifications` — a short, bare certification-list entry has none of those, so it fell through to `skills`. A near-identical sibling ("Dolby Atmos Certification") only survived by coincidence, via an unrelated `routing.py` keyword rule that happened to trip on the literal word "Certification" | Added a standalone exception ahead of the degree/institution/year check: a short line (≤40 chars) that doesn't end in sentence punctuation stays in `qualifications` — the shape of a real bare list entry, distinct from the much longer genuine skills/trait sentences documented elsewhere in the same code |
 | The second, real profile link ("point a.cademy: https://www.pointacademy.com/") was missing from Professional Profiles, Links, and Identifiers | `identifiers.TRUNCATED_URL_RE` treated ANY URL ending in `/`, `-`, or `_` as evidence of a PDF line-wrap truncation — but a root-domain URL normally, correctly ends in `/`; that was never truncation, and the check silently discarded a complete, valid link | Narrowed the pattern to `-`/`_` only — a genuine mid-word PDF-wrap truncation cuts on a hyphen or underscore, never cleanly at a slash |
 | An entire "KEYNOTES, PANELS, JUDGING AND OTHER INVITED ROLES" section (heading and all six entries) disappeared, fused onto the tail of an unrelated press-coverage bullet that preceded it in the source, with the words "...Forbes Middle East KEYNOTES, PANELS..." running on with no separator at all | The whole block is one single Word paragraph in the source docx with no `<w:br/>` anywhere inside it (confirmed via the raw XML — 0 `<w:br>`, 0 `<w:tab>` elements), so extraction correctly handed the classifier one giant run-on line. `_group_into_items` then had no way to know a new item started partway through it | New `_split_embedded_heading_runs`, run as a preprocessing pass: splits a line wherever a run of 3+ consecutive ALL-CAPS words appears after ordinary lower-case prose (shape-based, since "Keynotes, Panels..." isn't even one of the MDX template's own named headings — the fix only needed to stop the fusion, not classify it). A matching `STARTS_WITH_HEADING_RUN_RE` boundary rule in `_group_into_items` keeps the split from being immediately undone by the section's own unbulleted-prose grouping |
+| Five unrelated press-article links got filed as the person's own entries under "Professional Profiles, Links, and Identifiers" | A Word hyperlink whose visible text names the source but never spells out the URL ("MDX Studios 2025 Premiere Celebrates...") is emitted by extraction.py as a synthetic `"label: target"` line, and ALL such lines are appended at the very end of the document's text — after the real body, headers and footers. Whatever heading is physically LAST in the CV therefore silently inherits every hyperlink in the whole document as its own content, regardless of what the link actually points to | New `HYPERLINK_TARGET_LINE_RE` junks any line that is nothing but an optional label followed by a bare URL, removing it from ordinary heading-based body classification. `identifiers.find_identifiers`, which already scans the untouched original text with the correct position- and exclusion-aware logic, remains the sole path these links are found through — so the two real profile links are unaffected, only the position-accidental misfiling is removed |
+| A page footer ("AFROZ NAWAF \| ACADEMIC CV — 1") showed up as an empty-fields item under Profiles, and the wrong-URLs fix above initially looked "already resolved" only because the wrong source file was tested against | Same root cause as the hyperlink-target bug, but with no fix possible by shape alone: `_find_running_headers` recognises page furniture by counting exact repeats (a PDF genuinely re-emits its header on every extracted page), but python-docx reads a DOCX section's header/footer XML exactly ONCE regardless of how many pages the document actually has — the repeat-count check can never fire, so the footer is indistinguishable from ordinary body text and lands under whatever heading is physically last | extraction.py now tags every header/footer-sourced line with a private-use Unicode marker (`HEADER_FOOTER_MARKER`) invisible to everything else. `classify_rule_based` strips the marker and folds those lines into the SAME `running_headers` set a repeated PDF header already uses — stripped from body classification, but still offered to `_extract_letterhead` so a genuine identifier sitting in a footer is not lost, only kept out of whatever section happens to sit last |
 
 ## 2026-09-02 — A psychology-department résumé with a scrambled two-column layout: seven code defects, plus one standing data-integrity issue
 

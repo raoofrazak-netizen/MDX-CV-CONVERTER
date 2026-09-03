@@ -23,6 +23,11 @@ class TextBlock:
     order: int
 
 
+# A Unicode Private Use Area character, never produced by any real document
+# text, used to mark a line as sourced from a DOCX header/footer rather than
+# the document body. See extract_docx's comment on tagged_header_lines.
+HEADER_FOOTER_MARKER = ""
+
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -218,15 +223,31 @@ def extract_docx(path: Path) -> list[TextBlock]:
     except Exception:
         header_lines = []
 
+    # Header/footer lines are tagged with a private-use marker invisible to
+    # everything downstream except rule_classifier.classify_rule_based,
+    # which strips it back off immediately. Unlike a PDF -- extracted page
+    # by page, so a repeated running header naturally shows up several
+    # times and an existing repeat-count check can recognise it as page
+    # furniture -- python-docx reads a DOCX section's header/footer XML
+    # exactly ONCE regardless of how many pages the document actually
+    # spans, so that repeat-count check can never fire here no matter how
+    # many pages repeat it. Left untagged, a footer like "NAME | CV - 3"
+    # is indistinguishable from ordinary body text and lands, entirely by
+    # accident, as content of whatever section heading happens to be LAST
+    # in the document -- the same class of bug as the hyperlink-target
+    # lines below, just for header/footer text instead of link targets.
+    tagged_header_lines = [HEADER_FOOTER_MARKER + line for line in header_lines]
+
     seen_keys: set[str] = set()
-    for text in _docx_paragraph_texts(document) + header_lines + link_lines:
-        key = " ".join(text.split()).casefold()
+    for text in _docx_paragraph_texts(document) + tagged_header_lines + link_lines:
+        bare_text = text[len(HEADER_FOOTER_MARKER):] if text.startswith(HEADER_FOOTER_MARKER) else text
+        key = " ".join(bare_text.split()).casefold()
         # Same reasoning as the body-level dedup above: a running header or
         # footer commonly repeats a short label (name, page strip) that IS a
         # genuine duplicate, but content-shaped text (a job title, a real
         # sentence) is not deduplicated against just because it happens to
         # match something seen earlier in the body.
-        if key in seen_keys and _is_heading_shaped(text):
+        if key in seen_keys and _is_heading_shaped(bare_text):
             continue
         seen_keys.add(key)
         blocks.append(TextBlock(text=text, page=None, order=order))
