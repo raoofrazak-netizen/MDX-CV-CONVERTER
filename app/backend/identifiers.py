@@ -34,8 +34,13 @@ PLATFORM_PATTERNS: list[tuple[str, re.Pattern]] = [
 ]
 
 # A bare ORCID with no surrounding URL, e.g. "ORCID: 0000-0002-1825-0097".
+# The gap tolerates a label between "ORCID" and the number, not just a
+# colon -- "ORCID Identifier: 0009-..." is 13 non-digit characters long
+# (space, "Identifier:", space), one past a previous {0,12} cap that left
+# the whole identifier unrecognised on any CV phrasing it out in full
+# rather than abbreviating to a bare "ORCID:".
 BARE_ORCID_RE = re.compile(
-    r"\bORCID\b[^0-9]{0,12}(\d{4}-\d{4}-\d{4}-\d{3}[\dXx])", re.I
+    r"\bORCID\b[^0-9]{0,24}(\d{4}-\d{4}-\d{4}-\d{3}[\dXx])", re.I
 )
 
 # Any other web address. Used for personal and centre websites, which the

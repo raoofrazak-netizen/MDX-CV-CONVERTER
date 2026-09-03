@@ -190,7 +190,17 @@ SYNONYM_HEADINGS: dict[str, list[str]] = {
         # the publication record (as the reference MDX CV files them), not
         # under Knowledge Exchange, which covers events run and talks given.
         "CONFERENCE PRESENTATIONS", "CONFERENCES", "PRESENTATIONS",
-        "CONFERENCE PAPERS",
+        "CONFERENCE PAPERS", "CONFERENCE OUTPUTS", "ACADEMIC PROJECTS",
+        # "Select Academic Projects, Papers and Conference Outputs" is
+        # publications by any other name -- but word order defeats the
+        # "CONFERENCE PAPERS" synonym above (it reads "papers AND
+        # conference", not the bigram itself), and without a longer phrase
+        # to win on, the single word "PROJECTS" alone (a grants synonym)
+        # was the longest match found anywhere in the heading, filing six
+        # real conference papers as grants -- where _structure_grants, built
+        # for a "Role: X" funding convention, could make sense of only two
+        # of them and silently lost the rest to Unmapped.
+        "SELECT ACADEMIC PROJECTS, PAPERS AND CONFERENCE OUTPUTS",
         # A creative or design academic's research record is exhibited and
         # commissioned work, not journal articles -- "Select Practice
         # Outputs" occupies exactly the structural position "Select Research
@@ -788,11 +798,38 @@ def is_authoritative_heading(line: str) -> bool:
     if not stripped or len(stripped) > 100:
         return False
     normalized = _normalize_heading(stripped)
-    return any(
+    if any(
         normalized == phrase
         or (normalized.startswith(phrase) and len(normalized) <= len(phrase) + 3)
         for phrase in _OFFICIAL_HEADINGS
-    )
+    ):
+        return True
+    # A near-exact typo variant of the template's own wording is still the
+    # CV explicitly naming this section -- not a looser "probably means the
+    # same thing" synonym match, which is not this strict. Matters most for
+    # the template's own baked-in typo, "INTERNAL AND EXERNAL ACADEMIC
+    # LEADERSHIP": almost every real CV spells "External" correctly, so an
+    # exact-match-only check here never recognised the heading as
+    # authoritative even though _find_heading_key (which DOES tolerate
+    # typos) correctly filed the section by it -- routing.py then treated
+    # the section as un-stated and content-re-routed it by wording, moving
+    # "Module Leader, ..." out to Teaching and Learning on the word
+    # "Module" alone.
+    return _fuzzy_official_heading_key(normalized) is not None
+
+
+def _fuzzy_official_heading_key(normalized: str) -> str | None:
+    """Like _fuzzy_heading_key, but scoped to the official template phrases
+    only -- never a synonym -- for use where a fuzzy match must still mean
+    "the CV used our own wording", not merely "probably the same section"."""
+    from difflib import SequenceMatcher
+
+    best_key, best_ratio = None, 0.0
+    for phrase, key in _OFFICIAL_HEADINGS.items():
+        ratio = SequenceMatcher(None, normalized, phrase).ratio()
+        if ratio > best_ratio:
+            best_key, best_ratio = key, ratio
+    return best_key if best_ratio >= FUZZY_HEADING_RATIO else None
 
 
 def _find_heading_key(line: str) -> str | None:
@@ -2494,8 +2531,20 @@ def _extract_employment_fields(line: str, employer_key: str) -> dict[str, Any]:
     # and reattached as a second line once the title/employer split below is
     # done, via the same _line_override mechanism _reclassify_resume_
     # crosstalk already uses for an identically-shaped case.
+    # A THIRD pipe-delimited field ("Title, Employer | Date | City, Country")
+    # leaves a bare location on the "after" side once the date is removed --
+    # short and with no sentence punctuation, so it looks exactly like the
+    # ordinary "role sits after the date" convention this function was built
+    # for. Unlike that convention, "Dubai, UAE" is never a job title: an
+    # entry with no duty bullets of its own ("Intern, Schindler Group | Jan
+    # 2018 - Jul 2018 | Dubai, UAE") had "Dubai"/"UAE" stored as its
+    # title/employer, discarding the real ones on the "before" side.
+    after_is_bare_location = bool(BARE_CITY_COUNTRY_RE.match(after))
     discarded_narrative = None
-    if after and not DATE_REMNANT_RE.match(after) and not (after_is_narrative and before_is_usable):
+    if (
+        after and not DATE_REMNANT_RE.match(after) and not after_is_bare_location
+        and not (after_is_narrative and before_is_usable)
+    ):
         rest = after
     else:
         rest = before
