@@ -13,16 +13,19 @@ cd app/backend && python test_corpus.py
 
 ---
 
-## 2026-09-03 — A genuine staff CV written directly in the MDX template: six real data-loss defects found by deep-auditing source vs. converted output
+## 2026-09-03 — A genuine staff CV written directly in the MDX template: nine real data-loss defects found by deep-auditing source vs. converted output
 
 Requested explicitly: a side-by-side audit of a real converted CV against
 its source, checking for missing/corrupted data rather than waiting for it
-to surface CV-by-CV. Found six distinct bugs, all in grouping/boundary
-detection and grants field-parsing — none in extraction, which read every
-byte of the source correctly. Regression tests in
-`app/backend/test_afroz_grouping_and_grants.py`. Suite: 54/59 passing
-throughout (5 pre-existing failures, confirmed via `git stash` to predate
-this session's changes, unrelated to any of these fixes).
+to surface CV-by-CV. Found nine distinct bugs — six in grouping/boundary
+detection and grants field-parsing, one in qualifications/skills routing,
+one in profile-link recognition, and one in how a heading glued mid-
+paragraph onto unrelated content was (not) separated back out — none in
+extraction itself, which read every byte of the source correctly.
+Regression tests in `app/backend/test_afroz_grouping_and_grants.py`.
+Suite: 54/59 passing throughout (5 pre-existing failures, confirmed via
+`git stash` to predate this session's changes, unrelated to any of these
+fixes).
 
 | Defect | Cause | Fix |
 |---|---|---|
@@ -32,6 +35,9 @@ this session's changes, unrelated to any of these fixes).
 | An unrelated detail line ("2017: 25-seat theatre... \| AED 15,000") became its own bogus entry | The same regex fix above made it newly reachable — but it then false-positived on an ordinary amount ending "00", mistaking the last two digits for a 2-digit year | Added `(?<!\d)` before the year pattern, so a digit immediately before it disqualifies the match |
 | Research Grants: 4 real funded projects turned into ~29 scrambled fragments, field labels and values swapped (`"Role: Project Title"` / `"Project Title: <actual role text>"`) | `_structure_grants` was built for a CV that writes a single combined header ("Consultant: <project title>") — it had no concept of a CV that instead labels every field explicitly, the way the blank MDX template itself prompts for them ("Project Title:", "Role:", "Duration:", "Funding or External Agency:", "Value to the University:"). Every one of those labelled lines was read as its own new grant, with the label word stored as `role` and the real value mislabelled `project_title` | New `GRANT_FIELD_LABEL_RE`, checked first and more specifically: recognises the five real field-label words, opens a new entry only on "Project Title:", and adds every other labelled line as a field on whichever entry is currently open. The older single-header convention still works unchanged for CVs that use it |
 | A long-but-clean title/employer/location line ("Founder and Chief Creative Officer, Not an Agency Inc., Dubai, United Arab Emirates") lost to a 300+ character client-list description, which got stored as the person's job title | `_extract_employment_fields`'s "which side of the date is the real title" heuristic used a flat 60-character cutoff — too tight for a legitimately long but normal title/employer/location combination | Raised the cutoff to 100 and added an explicit check that the "before" side doesn't itself read as a sentence (`[.!?]\s+\S`), so the fix targets long-but-clean text specifically rather than just any long text |
+| A bare certification ("Fusion VFX") wrongly filed under a phantom "Skills" section instead of staying in Qualifications alongside its siblings | The per-item qualifications classification check required a degree, institution, or year signal before keeping an item in `qualifications` — a short, bare certification-list entry has none of those, so it fell through to `skills`. A near-identical sibling ("Dolby Atmos Certification") only survived by coincidence, via an unrelated `routing.py` keyword rule that happened to trip on the literal word "Certification" | Added a standalone exception ahead of the degree/institution/year check: a short line (≤40 chars) that doesn't end in sentence punctuation stays in `qualifications` — the shape of a real bare list entry, distinct from the much longer genuine skills/trait sentences documented elsewhere in the same code |
+| The second, real profile link ("point a.cademy: https://www.pointacademy.com/") was missing from Professional Profiles, Links, and Identifiers | `identifiers.TRUNCATED_URL_RE` treated ANY URL ending in `/`, `-`, or `_` as evidence of a PDF line-wrap truncation — but a root-domain URL normally, correctly ends in `/`; that was never truncation, and the check silently discarded a complete, valid link | Narrowed the pattern to `-`/`_` only — a genuine mid-word PDF-wrap truncation cuts on a hyphen or underscore, never cleanly at a slash |
+| An entire "KEYNOTES, PANELS, JUDGING AND OTHER INVITED ROLES" section (heading and all six entries) disappeared, fused onto the tail of an unrelated press-coverage bullet that preceded it in the source, with the words "...Forbes Middle East KEYNOTES, PANELS..." running on with no separator at all | The whole block is one single Word paragraph in the source docx with no `<w:br/>` anywhere inside it (confirmed via the raw XML — 0 `<w:br>`, 0 `<w:tab>` elements), so extraction correctly handed the classifier one giant run-on line. `_group_into_items` then had no way to know a new item started partway through it | New `_split_embedded_heading_runs`, run as a preprocessing pass: splits a line wherever a run of 3+ consecutive ALL-CAPS words appears after ordinary lower-case prose (shape-based, since "Keynotes, Panels..." isn't even one of the MDX template's own named headings — the fix only needed to stop the fusion, not classify it). A matching `STARTS_WITH_HEADING_RUN_RE` boundary rule in `_group_into_items` keeps the split from being immediately undone by the section's own unbulleted-prose grouping |
 
 ## 2026-09-02 — A psychology-department résumé with a scrambled two-column layout: seven code defects, plus one standing data-integrity issue
 

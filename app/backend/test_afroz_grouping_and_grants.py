@@ -1,6 +1,6 @@
 """Regression tests for real data-loss bugs found deep-auditing a genuine
 staff CV already written in the MDX template itself, against its portal
-conversion (2026-09-03). Five distinct bug classes, all traced to
+conversion (2026-09-03). Eight distinct bug classes, all traced to
 grouping/boundary detection in _group_into_items and field-parsing in
 _structure_grants:
 
@@ -32,9 +32,22 @@ _structure_grants:
      perfectly normal title/employer/location combination, which then lost
      to a run-on narrative description hundreds of characters long, storing
      that whole client list as the person's job title.
+  7. identifiers.TRUNCATED_URL_RE treated ANY trailing "/" as evidence a
+     URL was cut off mid-word by a PDF line-wrap -- but a perfectly
+     complete root-domain URL ("https://www.pointacademy.com/") ends in a
+     slash too, and that real, distinct profile link was silently dropped
+     from the Professional Profiles, Links, and Identifiers section.
+  8. A single Word paragraph with no <w:br/> anywhere inside it can weld a
+     whole section (heading and all its entries) onto the tail of
+     unrelated prose that came right before it in the source, with
+     nothing but a space between them. "KEYNOTES, PANELS, JUDGING AND
+     OTHER INVITED ROLES" -- not even one of the MDX template's own named
+     sections -- was glued onto a press-coverage bullet this way and
+     disappeared into it entirely.
 
 Run directly: python test_afroz_grouping_and_grants.py
 """
+import identifiers
 import rule_classifier as rc
 
 
@@ -188,6 +201,61 @@ def test_short_title_still_wins_over_a_real_narrative_after_side():
     )
     fields = rc._extract_employment_fields(text, "employer")
     assert "New York" in fields.get("title", "") or "New York" in fields.get("employer", "")
+
+
+# --- Bug 7: a complete root-domain URL wrongly treated as truncated -----
+
+def test_trailing_slash_url_is_not_treated_as_truncated():
+    text = (
+        "PROFESSIONAL PROFILES, LINKS, AND IDENTIFIERS\n"
+        "Website: https://www.afroz.xyz\n"
+        "point a.cademy: https://www.pointacademy.com/\n"
+    )
+    found = identifiers.find_identifiers(text)
+    urls = {item["url"] for item in found}
+    assert "https://www.pointacademy.com/" in urls
+
+
+def test_genuinely_hyphen_truncated_url_still_rejected():
+    assert identifiers.TRUNCATED_URL_RE.search("https://www.example.com/some-page-")
+    assert identifiers.TRUNCATED_URL_RE.search("https://www.example.com/some_page_")
+    assert not identifiers.TRUNCATED_URL_RE.search("https://www.example.com/")
+
+
+# --- Bug 8: a whole section glued onto unrelated prose with no break ----
+
+def test_embedded_heading_run_is_split_from_preceding_prose():
+    line = (
+        "Middlesex University Dubai (2019) - MDX Dubai awarded Best Media Centre "
+        "by Forbes Middle East KEYNOTES, PANELS, JUDGING AND OTHER INVITED ROLES "
+        "CABSAT - World Content & Satellite Leaders Panel | Panelist | 2018 | Dubai, UAE"
+    )
+    pieces = rc._split_embedded_heading_runs([line])
+    assert len(pieces) == 2
+    assert pieces[0].endswith("Forbes Middle East")
+    assert pieces[1].startswith("KEYNOTES, PANELS, JUDGING AND OTHER INVITED ROLES")
+
+
+def test_split_off_heading_run_stays_its_own_item_not_rewelded():
+    body_lines = rc._split_embedded_heading_runs([
+        "Media coverage and features: Khaleej Times (2025) - a piece about the "
+        "programme. Middlesex University Dubai (2019) - MDX Dubai awarded Best "
+        "Media Centre by Forbes Middle East KEYNOTES, PANELS, JUDGING AND OTHER "
+        "INVITED ROLES CABSAT - World Content & Satellite Leaders Panel | "
+        "Panelist | 2018 | Dubai, UAE"
+    ])
+    grouped = rc._group_into_items(body_lines, section_key="knowledge_exchange")
+    assert len(grouped) == 2
+    assert any(g.startswith("KEYNOTES, PANELS") for g in grouped)
+    assert not any("Forbes Middle East KEYNOTES" in g for g in grouped)
+
+
+def test_ordinary_three_word_acronym_run_inside_a_normal_sentence_is_left_alone():
+    # Guard against over-firing: a short run of capitalised acronyms that is
+    # ordinary CV content (not a glued-on heading) must not be split apart.
+    line = "Certified in AWS EC2 S3 deployment and cloud infrastructure management."
+    pieces = rc._split_embedded_heading_runs([line])
+    assert len(pieces) == 1
 
 
 if __name__ == "__main__":

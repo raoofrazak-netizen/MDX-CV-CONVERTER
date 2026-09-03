@@ -70,9 +70,12 @@ LETTERHEAD_SCAN_LINES = 25
 PROFILE_HEADING_RE = re.compile(
     r"\b(?:profiles?|links?|identifiers?|online presence|social media|web)\b", re.I
 )
-# A URL broken across a line by a PDF exporter ends mid-word on a hyphen and
-# is not a usable address.
-TRUNCATED_URL_RE = re.compile(r"[-_/]$")
+# A URL broken across a line by a PDF exporter ends mid-word on a hyphen or
+# underscore and is not a usable address. A trailing "/" is deliberately NOT
+# included here -- that is just the normal way to write a root-domain URL
+# ("https://www.pointacademy.com/"), not a truncation artifact, and treating
+# it as one silently dropped a real, complete profile link.
+TRUNCATED_URL_RE = re.compile(r"[-_]$")
 MIN_URL_LENGTH = 12
 
 

@@ -384,7 +384,9 @@ def _is_junk_line(text: str) -> bool:
     # a resolved heading fragment already is.
     if _is_whole_line_letter_spaced(stripped):
         return True
-    return _is_concatenated_headings_line(stripped)
+    if _is_concatenated_headings_line(stripped):
+        return True
+    return bool(HYPERLINK_TARGET_LINE_RE.match(stripped))
 
 
 def _is_concatenated_headings_line(text: str) -> bool:
@@ -443,6 +445,30 @@ CITY_STATE_ZIP_RE = re.compile(r"^[A-Za-z .]{2,40},\s*[A-Z]{2},?\s*\d{5}(-\d{4})
 # enough, that this is a safe trade against publishing "educationCV" as a
 # bullet under Previous Employment.
 GLUED_ICON_TEXT_RE = re.compile(r"^[a-z]{4,}[A-Z]{2,}$")
+
+# A line that is nothing but a Word hyperlink's target address, synthesised
+# by extraction.py's _hyperlink_targets for a link whose visible text names
+# the platform but never spells out the URL ("MDX Studios 2025 Premiere
+# Celebrates..." with the address only in the relationship, not the text).
+# extraction.py always appends every such line at the very end of the
+# document's text -- after the real body, after headers and footers -- so
+# whichever section heading happens to be LAST in the CV silently inherits
+# every hyperlink in the entire document as if it were that section's own
+# content. On one real CV this put five unrelated press-article links (from
+# a "Media coverage" bullet under Knowledge Exchange, nowhere near Profiles)
+# into "Professional Profiles, Links, and Identifiers" -- not because they
+# were actually links to the person's own profiles, but purely because that
+# heading came last.
+#
+# identifiers.find_identifiers already exists specifically to scan the whole
+# document for exactly these addresses, with the position-aware and
+# exclusion logic this ad-hoc physical placement has none of (see that
+# module's docstring). Junking the line here removes it from ordinary
+# heading-based body classification without removing it from identifiers'
+# own scan, which reads the untouched original text separately -- so the
+# link is still found, just only through the mechanism built to judge it
+# correctly instead of by an accident of where it landed on the page.
+HYPERLINK_TARGET_LINE_RE = re.compile(r"^(?:.*:\s*)?https?://\S+$", re.IGNORECASE)
 
 # A personal-details field that has lost its own label. On a scrambled
 # text-box layout the label ("Date of Birth:") and its value can land in
@@ -1186,6 +1212,12 @@ def _group_into_items(body_lines: list[str], section_key: str | None = None) -> 
             # merged into the citation above it, the group divider is lost
             # and every entry below inherits the wrong sub-group.
             or _find_heading_key(text) is not None
+            # A line that opens with a heading-shaped run of 3+ consecutive
+            # ALL-CAPS words is what a heading glued mid-paragraph onto
+            # unrelated content looks like once _split_embedded_heading_runs
+            # has separated it out (see that function's docstring) -- it
+            # must start its own item here or the split is undone.
+            or STARTS_WITH_HEADING_RUN_RE.match(text)
             # And the reverse: once a sub-heading line HAS become its own
             # `current` entry, it must never accept a continuation either.
             # Under sentence-boundary grouping (no bullet glyphs in this
@@ -1655,6 +1687,56 @@ def _merge_split_letter_spaced_headings(lines: list[str]) -> list[str]:
         out.append(line)
         i += 1
     return out
+
+
+# A CV paragraph occasionally glues a real section heading onto the tail of
+# unrelated prose with no separator at all: the whole physical line is one
+# single Word paragraph with no <w:br/> anywhere inside it (see
+# extraction.py's _own_text docstring), so extraction correctly hands the
+# classifier one giant run-on line rather than several. One CV welded an
+# entire "KEYNOTES, PANELS, JUDGING AND OTHER INVITED ROLES" section --
+# heading and all six entries -- onto the end of the press-coverage bullet
+# that came right before it in the source: "...MDX Dubai awarded Best Media
+# Centre by Forbes Middle East KEYNOTES, PANELS, JUDGING AND OTHER INVITED
+# ROLES CABSAT..." as one unbroken sentence. Left alone, that swallows the
+# whole keynotes section into whatever unrelated item happened to precede
+# it, so it never appears as a section of its own -- silent, total loss of
+# a real block of the CV even though the words are technically still
+# present somewhere in the document.
+#
+# Recognised by shape alone (a run of 3+ consecutive ALL-CAPS words,
+# appearing after ordinary lower-case prose, not at the very start of the
+# line) rather than by name: the heading itself is not always one the MDX
+# template lists by name (this one isn't), so the fix here is only to stop
+# it fusing onto content it has nothing to do with, not to classify it --
+# classification runs as normal afterward on the now-separated line.
+EMBEDDED_HEADING_RUN_RE = re.compile(
+    r"(?<=[a-z\)])\s+(?=(?:[A-Z][A-Z&/,.'-]*\s+){2,}[A-Z][A-Z&/,.'-]*(?:\s|$))"
+)
+
+
+def _split_embedded_heading_runs(lines: list[str]) -> list[str]:
+    out: list[str] = []
+    for line in lines:
+        for piece in EMBEDDED_HEADING_RUN_RE.split(line):
+            piece = piece.strip()
+            if piece:
+                out.append(piece)
+    return out
+
+
+# The same shape check as EMBEDDED_HEADING_RUN_RE's lookahead, anchored to
+# the START of a line instead of a mid-line split point. A line that begins
+# this way is exactly what _split_embedded_heading_runs produces -- and
+# _group_into_items must never weld it back onto the item before it just
+# because the two lines don't otherwise look like separate entries (an
+# unbulleted, unnamed section such as this CV's own "Keynotes, Panels,
+# Judging..." block has no bullet glyphs and its opening line doesn't end in
+# real sentence punctuation, so without this the split achieved above is
+# immediately undone one stage later).
+STARTS_WITH_HEADING_RUN_RE = re.compile(
+    r"^(?:[A-Z][A-Z&/,.'-]*\s+){2,}[A-Z][A-Z&/,.'-]*(?:\s|$)"
+)
 
 
 def _split_into_sections(
@@ -3310,6 +3392,7 @@ def classify_rule_based(cv_text: str, source_document: str) -> list[dict[str, An
     body_lines = [l for l in lines if " ".join(l.split()) not in running_headers]
     body_lines = _merge_wrapped_headings(body_lines)
     body_lines = _merge_split_letter_spaced_headings(body_lines)
+    body_lines = _split_embedded_heading_runs(body_lines)
     preamble, sections, authoritative = _split_into_sections(body_lines)
 
     # The running header goes in front of the letterhead candidates: on an
@@ -3504,6 +3587,42 @@ def classify_rule_based(cv_text: str, source_document: str) -> list[dict[str, An
                 ):
                     prev = items[-1]
                     prev["source_text"] = f"{prev['source_text']} {text.strip()}".strip()
+                    continue
+                # A short bare line ("Fusion VFX", "Dolby Atmos
+                # Certification") directly following an already-genuine
+                # qualification item is a continuation of THAT item's own
+                # certification list, not stray skills prose -- prose long
+                # enough to be the false positive this whole check exists
+                # for ("Huge experience in managing all marketing and
+                # advertising...") never happens to also be this short.
+                # Without this, a certification list that a PDF export
+                # rendered one item per line got scattered: some items
+                # rescued back to Qualifications only by chance (this one
+                # also happening to contain the word "Certification",
+                # tripping an unrelated routing rule), others -- with no
+                # such lucky word match -- left stranded under Skills.
+                # A short, bare noun-phrase item from a certification list
+                # ("Fusion VFX", "Dolby Atmos Certification", "Advanced
+                # Editing") has none of the degree/institution/year signals
+                # below either, but it is nothing like the false positive
+                # this whole check exists to catch: real skills/trait prose
+                # ("Huge experience in managing all marketing and
+                # advertising...", "Excellent skills to identify and resolve
+                # problems...") is always a full sentence, comfortably
+                # longer than this. Checking length alone, independent of
+                # whatever the previous item ended up classified as, matters
+                # specifically because a PDF export commonly puts one
+                # certification per line with nothing to visually group
+                # them -- each line hits this same check in isolation, so
+                # even the item directly before this one may itself already
+                # be sitting in the wrong section at this point in the
+                # pipeline, before routing's later, unrelated rescue (a
+                # coincidental keyword match) gets a chance to run.
+                if len(text) <= 40 and not re.search(r"[.!?]\s*$", text):
+                    items.append({
+                        "section": "qualifications", "fields": {},
+                        "source_text": text, "confidence": 0.7,
+                    })
                     continue
                 if not (
                     DEGREE_RE.search(text) or INSTITUTION_RE.search(text)
