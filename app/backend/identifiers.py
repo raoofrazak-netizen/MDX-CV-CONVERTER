@@ -111,17 +111,42 @@ def find_identifiers(text: str) -> list[dict[str, str]]:
 
     lines = text.splitlines()
 
+    # A platform can legitimately match on more than one line: a personal
+    # CV routinely spells its LinkedIn out twice -- once as visible text
+    # (wrapped mid-word by whatever laid the page out, "linkedin.com/in/j
+    # ohn-siko-82a30921/" with a stray space from a PDF/DOCX line-wrap) and
+    # once as the actual hyperlink target underneath it (always the intact
+    # address, since that is what a click actually goes to, and always the
+    # last line a document's synthetic hyperlink-target text can appear on
+    # -- see extraction.py's _hyperlink_targets). Taking the first match
+    # per platform used to mean the WRAPPED, truncated version always won
+    # simply by coming first in reading order. Collecting every match and
+    # keeping the one with the longest captured identifier favours the
+    # intact address over a same-platform match broken by a line-wrap,
+    # regardless of which one happened to appear first.
+    candidates: dict[str, tuple[re.Match, str]] = {}
     for line in lines:
         for platform, pattern in PLATFORM_PATTERNS:
-            if platform in seen_platforms:
-                continue
-            match = pattern.search(line)
-            if not match:
-                continue
-            url = _canonical_url(platform, match.group(1), match.group(0))
-            seen_platforms.add(platform)
-            seen_urls.add(url.rstrip("/").casefold())
-            found.append({"platform": platform, "url": url, "source_text": line.strip()})
+            # finditer, not search: a synthetic hyperlink-target line (see
+            # extraction.py's _hyperlink_targets) writes the broken visible
+            # label FIRST and the intact target SECOND on the very same
+            # line ("linkedin.com/in/j: linkedin.com/in/john-siko-...") --
+            # search() only ever sees the first, broken occurrence, so the
+            # correct one right next to it on the same line was never even
+            # considered.
+            for match in pattern.finditer(line):
+                best = candidates.get(platform)
+                if best is None or len(match.group(1)) > len(best[0].group(1)):
+                    candidates[platform] = (match, line)
+
+    for platform, pattern in PLATFORM_PATTERNS:
+        if platform in seen_platforms or platform not in candidates:
+            continue
+        match, line = candidates[platform]
+        url = _canonical_url(platform, match.group(1), match.group(0))
+        seen_platforms.add(platform)
+        seen_urls.add(url.rstrip("/").casefold())
+        found.append({"platform": platform, "url": url, "source_text": line.strip()})
 
     if "ORCID" not in seen_platforms:
         for line in lines:

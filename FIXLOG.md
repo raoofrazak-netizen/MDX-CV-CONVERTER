@@ -13,6 +13,26 @@ cd app/backend && python test_corpus.py
 
 ---
 
+## 2026-09-03 (second audit) — A second real CV, deliberately not close to the MDX template: a URL-priority bug and a two-column scramble welding Languages onto Experience
+
+Requested explicitly, as a follow-up to the Afroz audit: "do a full audit
+on another real CV." Chosen specifically for contrast with Afroz's CV
+(which was already written directly in the MDX template, close to its own
+structure) -- this one uses its own headings and a two-column layout with
+no relationship to the template at all, stress-testing generic
+classification rather than a near-template document. Two distinct bugs
+found and fixed. Regression tests in
+`app/backend/test_siko_language_and_identifiers.py`. Suite: 54/59 passing
+throughout (5 pre-existing, unrelated failures). Live-tested via the real
+running portal against the actual CV.
+
+| Defect | Cause | Fix |
+|---|---|---|
+| The CV's real LinkedIn URL was replaced by a single truncated character (`https://www.linkedin.com/in/j`) | `identifiers.find_identifiers` took the FIRST match for a platform found while scanning line by line, with no way to prefer a better one found later. This CV's LinkedIn is written twice -- once as visible text broken by a line-wrap ("linkedin.com/in/**j ohn**-siko-..."), once as the intact address behind the actual Word hyperlink (see extraction.py's `_hyperlink_targets`) -- and the broken version, appearing first, always won. A second, compounding gap: the two occurrences can sit on the SAME synthesized line ("label: target"), and `.search()` only ever inspects the FIRST occurrence within a line, never reaching the correct one right next to it | Collects every candidate match for a platform across every line (via `.finditer()`, not `.search()`), and keeps the one with the longest captured identifier -- a truncated match is, by construction, shorter than the real one, regardless of which occurrence happened to come first |
+| A real language entry ("French (B2, working proficiency)") welded onto the start of an entirely unrelated job entry from a different part of the CV, and everything from that job entry onward kept accumulating under Language Proficiency for several more entries | A two-column layout's sidebar (Languages) interleaves with the main column's Experience text once linearised, with no bullet and no full stop between them for any existing boundary check to catch. A stricter, related bug: the existing "real language entry" shape check (`SHORT_LABELLED_ENTRY_RE`) rejected ANY line containing a digit at all, which also blocked it from ever recognising "French (B2, ...)" as a genuine language entry in the first place, since a CEFR level like "B2" is an ordinary part of how a language section states its own proficiency | `SHORT_LABELLED_ENTRY_RE`'s parenthetical form now allows a digit or comma inside the parentheses, but still requires the parenthesis to OPEN on a letter -- so a real "(B2, working proficiency)" now matches while a bare "(2020-2022)" date range still doesn't. A new asymmetric boundary rule in `_group_into_items`, scoped to `language_proficiency`: once the line above already looks like a genuine, complete language entry, anything that does NOT ALSO look like one is never a continuation of it and always starts a new item -- stopping the run-on weld without needing to know what the unrelated content actually is |
+
+Two further findings from the same audit were left as documented, lower-severity limitations rather than fixed: the split-off job-entry items above land under `language_proficiency`/`committees` instead of Previous Employment (no data is lost or merged -- each is now a complete, readable, individually re-filable item, just under the wrong heading; auto-routing them correctly would need a broad content-based reclassifier, and this codebase has already tried and rejected that class of general heuristic three times for misclassifying unrelated CVs elsewhere in the corpus -- see `_reclassify_resume_crosstalk`'s docstring), and a "CITIZENSHIP" side-heading (not a section the MDX template has at all) is absorbed as content into whatever Previous Employment entry precedes it rather than being flagged for HR review, since it is only one word and the sidebar-scramble class of bug does not have a general fix in this codebase.
+
 ## 2026-09-03 — A genuine staff CV written directly in the MDX template: ten real data-loss defects found by deep-auditing source vs. converted output
 
 Requested explicitly: a side-by-side audit of a real converted CV against

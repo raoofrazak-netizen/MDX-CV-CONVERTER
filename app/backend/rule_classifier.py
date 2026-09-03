@@ -989,18 +989,22 @@ LANGUAGE_LIST_LINE_RE = re.compile(
 
 # A short "Name : Level" or "Name (Level)" line, one per language or skill,
 # as a bullet-free LANGUAGES/SKILLS block commonly writes them ("English :
-# Proficient", "Bulgarian (Fluent)"). No digit, so a date-bearing line is
-# never mistaken for one.
+# Proficient", "Bulgarian (Fluent)", "French (B2, working proficiency)").
+# The parenthetical form allows a digit or comma inside the parentheses (a
+# CEFR level, "B2", commonly sits right beside the descriptor) but the
+# parenthesis must still OPEN on a letter -- a bare "(2020-2022)" date range
+# starts on a digit and is never mistaken for a proficiency level. The
+# colon form stays letters-only throughout: unlike the parenthetical form,
+# nothing about it structurally rules out a "Role : 2020-2022" date line.
 SHORT_LABELLED_ENTRY_RE = re.compile(
-    r"^[A-Za-z][A-Za-z .]{0,24}(?:\s*:\s*[A-Za-z][A-Za-z /]{0,24}|\s*\([A-Za-z][A-Za-z /]{0,24}\))$"
+    r"^[A-Za-z][A-Za-z .]{0,24}(?:\s*:\s*[A-Za-z][A-Za-z /]{0,24}"
+    r"|\s*\([A-Za-z][A-Za-z0-9 /,]{0,40}\))$"
 )
 MAX_LABELLED_ENTRY_WORDS = 5
 
 
 def _is_short_labelled_entry(line: str) -> bool:
     text = line.strip()
-    if any(c.isdigit() for c in text):
-        return False
     if not (1 < len(text.split()) <= MAX_LABELLED_ENTRY_WORDS):
         return False
     return bool(SHORT_LABELLED_ENTRY_RE.match(text))
@@ -1309,6 +1313,28 @@ def _group_into_items(body_lines: list[str], section_key: str | None = None) -> 
             # is never itself part of a language list, so it always starts
             # a new item here regardless of what the previous line ended in.
             or (section_key == "language_proficiency" and JOB_DUTY_SENTENCE_RE.match(text))
+            # A two-column CV's sidebar (Languages, Citizenship) commonly
+            # interleaves with the main column's Experience text in reading
+            # order -- a short, genuinely-a-language line ("French (B2,
+            # working proficiency)") sits directly beside the START of an
+            # unrelated job entry from the other column ("Risk Advisory
+            # Group, London -- Deputy Head of..."), with neither a bullet
+            # nor a full stop between them for the checks above to catch.
+            # Unlike JOB_DUTY_SENTENCE_RE (a positive match on ONE specific
+            # shape, a duty sentence), this is a purely negative signal:
+            # once the entry ABOVE already looks exactly like a real,
+            # complete language entry, anything that does NOT ALSO look
+            # like one is never a continuation of it, whatever shape that
+            # something else turns out to be. The item that starts here
+            # still lands under language_proficiency, same as before this
+            # rule -- it is no longer welded onto real language content and
+            # unreadable, which is the immediate loss this fixes; getting
+            # it filed under the RIGHT section is a separate step.
+            or (
+                section_key == "language_proficiency"
+                and _is_short_labelled_entry(current[-1])
+                and not _is_short_labelled_entry(text)
+            )
         ):
             starts_new = True
 
