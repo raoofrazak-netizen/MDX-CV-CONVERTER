@@ -2477,10 +2477,22 @@ def _extract_employment_fields(line: str, employer_key: str) -> dict[str, Any]:
         bool(before) and not DATE_REMNANT_RE.match(before) and len(before) <= 100
         and not re.search(r"[.!?]\s+\S", before)
     )
+    # When the narrative side loses specifically because the OTHER side won
+    # on being short and clean (not because the narrative side was itself
+    # unusable), it is still real content -- often the single most
+    # substantive sentence in the whole entry ("...company raised USD 4.2M
+    # seed led by Forerunner Ventures and Sequoia Capital"). Picking the
+    # short side as the title must not silently discard it; it is kept here
+    # and reattached as a second line once the title/employer split below is
+    # done, via the same _line_override mechanism _reclassify_resume_
+    # crosstalk already uses for an identically-shaped case.
+    discarded_narrative = None
     if after and not DATE_REMNANT_RE.match(after) and not (after_is_narrative and before_is_usable):
         rest = after
     else:
         rest = before
+        if after_is_narrative and after and not DATE_REMNANT_RE.match(after):
+            discarded_narrative = after
 
     # A trailing "City, ST" is the entry's location, not a third field in
     # the title/employer split -- left in, "Advertising Manager, Clearpoint,
@@ -2553,6 +2565,10 @@ def _extract_employment_fields(line: str, employer_key: str) -> dict[str, Any]:
     if ongoing:
         fields["is_current"] = True
     fields[employer_key] = employer
+    if discarded_narrative:
+        header_line = _employment_line(fields, employer_key, is_present=False)
+        if header_line:
+            fields["_line_override"] = f"{header_line}\n{discarded_narrative}"
     return fields
 
 
@@ -3288,6 +3304,18 @@ def _reclassify_resume_crosstalk(items: list[dict[str, Any]]) -> list[dict[str, 
 # subgroup of Publications (see SUBGROUPED_SECTIONS) and must be left
 # exactly where it is. Matching by specific meaning rather than by shape
 # is what keeps this safe to apply broadly.
+#
+# Case-SENSITIVE and matched against the RAW text, deliberately not run
+# through _normalize_heading's uppercasing first: a real sub-heading label
+# is written in the CV's own heading style, which is ALL CAPS. Without
+# this, "Media coverage and features: Khaleej Times (2025) -- ..." (an
+# ordinary Title-Case lead-in phrase opening a real, legitimate Knowledge
+# Exchange bullet, sentence-cased like the rest of the CV's prose) matched
+# "MEDIA COVERAGE" just as readily as the genuinely-capitalised "SELECTED
+# MEDIA" heading it was built for -- and, worse, being a BLOCK marker,
+# carried the reroute forward into the real Keynotes/Panels content that
+# happened to follow it in the same section, deleting it from the
+# generated document entirely.
 NO_HOME_SINGLE_FACT_RE = re.compile(
     r"^(?:CITIZENSHIP|NATIONALITY|VISA STATUS|MARITAL STATUS|DATE OF BIRTH"
     r"|PERSONAL DETAILS|GENDER)\b"
@@ -3334,7 +3362,10 @@ def _reroute_no_home_subheadings(items: list[dict[str, Any]]) -> list[dict[str, 
             active_section = None
             continue
         text = item.get("source_text", "")
-        prefix = _normalize_heading(text[:40])
+        # Whitespace-collapsed but NOT case-folded -- see NO_HOME_BLOCK_RE's
+        # comment on why the marker must be matched against the CV's own
+        # actual casing rather than a normalized-to-uppercase form.
+        prefix = " ".join(text[:40].split())
         if NO_HOME_SINGLE_FACT_RE.match(prefix):
             reroute = True
             active_section = None  # this label covers only itself, not what follows

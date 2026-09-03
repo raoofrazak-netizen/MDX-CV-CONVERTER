@@ -1,6 +1,6 @@
 """Regression tests for real data-loss bugs found deep-auditing a genuine
 staff CV already written in the MDX template itself, against its portal
-conversion (2026-09-03). Nine distinct bug classes, all traced to
+conversion (2026-09-03). Eleven distinct bug classes, all traced to
 grouping/boundary detection in _group_into_items and field-parsing in
 _structure_grants:
 
@@ -54,6 +54,22 @@ _structure_grants:
      hyperlink-target lines in bug 7 -- it lands as if it were real body
      content of whatever section heading happens to be physically LAST in
      the document.
+  10. Found live-testing bug 8's own fix: NO_HOME_BLOCK_RE (built for a
+      DIFFERENT CV's "SELECTED MEDIA" sub-heading, see
+      test_siko_language_and_identifiers.py) matched "Media coverage and
+      features: Khaleej Times..." too -- an ordinary, Title-Case lead-in
+      phrase opening a real Knowledge Exchange bullet, not a genuine
+      no-home sub-heading -- and, being a BLOCK marker, carried the reroute
+      forward into the real Keynotes/Panels content bug 8 had JUST fixed,
+      deleting it from the generated document all over again.
+  11. _extract_employment_fields' "before vs after the date" choice
+      (bug 6) correctly picks the short, clean title/employer text over a
+      long narrative on the other side of the date -- but then silently
+      DISCARDED that narrative rather than keeping it: "...company raised
+      USD 4.2M seed led by Forerunner Ventures and Sequoia Capital" and
+      "...portfolio exceeding USD 200M in combined enterprise value..."
+      never appeared anywhere in the generated document, even though the
+      title/employer/dates around them were parsed perfectly correctly.
 
 Run directly: python test_afroz_grouping_and_grants.py
 """
@@ -297,6 +313,64 @@ def test_header_footer_line_does_not_break_full_name_detection():
     )
     items = rc.classify_rule_based(text, "test.docx")
     assert any(it["section"] == "full_name" and "Jane Doe" in it["fields"].get("value", "") for it in items)
+
+
+# --- Bug 10: NO_HOME_BLOCK_RE false-positived on ordinary sentence-case text
+
+def test_ordinary_title_case_media_sentence_is_not_rerouted():
+    # "Media coverage and features:" reads exactly like the words in
+    # NO_HOME_BLOCK_RE, but it is ordinary sentence-case prose opening a
+    # real, legitimate item -- not a genuine ALL-CAPS sub-heading label.
+    items = [
+        {"section": "knowledge_exchange", "fields": {}, "confidence": 0.8, "source_text":
+            "Media coverage and features: Khaleej Times (2025) - a real press mention."},
+        {"section": "knowledge_exchange", "fields": {}, "confidence": 0.8, "source_text":
+            "KEYNOTES, PANELS, JUDGING AND OTHER INVITED ROLES CABSAT - a real keynote entry."},
+    ]
+    result = rc._reroute_no_home_subheadings(items)
+    assert result[0]["section"] == "knowledge_exchange"
+    assert result[1]["section"] == "knowledge_exchange"
+
+
+def test_genuinely_all_caps_media_label_is_still_rerouted():
+    # The fix must not lose the case it was built for: a label the CV
+    # itself writes in its own heading style (ALL CAPS) must still move.
+    items = [
+        {"section": "publications", "fields": {}, "confidence": 0.8, "source_text":
+            "SELECTED MEDIA Outlets for interviews include:"},
+        {"section": "publications", "fields": {}, "confidence": 0.8, "source_text":
+            "Some Outlet Name"},
+    ]
+    result = rc._reroute_no_home_subheadings(items)
+    assert result[0]["section"] == "unmapped"
+    assert result[1]["section"] == "unmapped"
+
+
+# --- Bug 11: the losing side of a title/date split silently discarded ---
+
+def test_discarded_narrative_is_reattached_not_dropped():
+    text = (
+        "Creative Director and Growth Lead (Middle East), Cococart.co (Y Combinator S21), "
+        "Remote/Global (2020 - 2021) - Product, UX/UI, growth and campaign strategy for the "
+        "UAE market during scale-up to 20,000+ businesses in 90+ countries; company raised "
+        "USD 4.2M seed led by Forerunner Ventures and Sequoia Capital"
+    )
+    fields = rc._extract_employment_fields(text, "employer")
+    assert fields["title"].startswith("Creative Director and Growth Lead")
+    assert "_line_override" in fields
+    assert "Forerunner Ventures" in fields["_line_override"]
+    assert "Sequoia Capital" in fields["_line_override"]
+    # The override's first line must still be the clean, correctly parsed
+    # header, not the narrative alone.
+    assert fields["_line_override"].startswith("Creative Director and Growth Lead")
+
+
+def test_short_clean_entry_gets_no_spurious_override():
+    # Guard against over-firing: an entry with nothing substantial on the
+    # discarded side must not grow a pointless second line.
+    text = "Senior Lecturer, Middlesex University Dubai (2020 - 2022)"
+    fields = rc._extract_employment_fields(text, "employer")
+    assert "_line_override" not in fields
 
 
 if __name__ == "__main__":
