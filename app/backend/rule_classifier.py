@@ -3263,6 +3263,100 @@ def _reclassify_resume_crosstalk(items: list[dict[str, Any]]) -> list[dict[str, 
     return items
 
 
+# Two closed, exact-match vocabularies of sub-heading labels that name
+# content with no home in the MDX template at all. Neither is a heading
+# the template recognises, so nothing forces a boundary or a section
+# change when one appears mid-document: "CITIZENSHIP USA/France UAE Golden
+# Visa holder" silently became content of whatever Employment entry
+# happened to precede it, and "SELECTED MEDIA" followed by four lines of
+# outlet names silently became Publications, indistinguishable from the
+# person's own peer-reviewed work.
+#
+# Split into two groups because they behave differently once found. A
+# personal-detail label states ONE bare fact and is done -- only the item
+# carrying the label itself is rerouted, exactly like the single-fact junk
+# patterns already used elsewhere (BARE_DOB_RE, BARE_COUNTRY_RE). A media
+# label instead OPENS a block that continues across several following
+# items with no marker of their own ("SELECTED MEDIA" / outlet names /
+# more outlet names / ...) -- those items must be carried forward too, or
+# only the label line itself would move and the outlet names right behind
+# it would stay in Publications exactly as before.
+#
+# Deliberately closed, exact-match lists, not a general "unrecognised
+# heading-shaped line" detector: "SELECTED ARTICLES" is ALSO an
+# unrecognised heading by the same shape test, but it is a genuine, wanted
+# subgroup of Publications (see SUBGROUPED_SECTIONS) and must be left
+# exactly where it is. Matching by specific meaning rather than by shape
+# is what keeps this safe to apply broadly.
+NO_HOME_SINGLE_FACT_RE = re.compile(
+    r"^(?:CITIZENSHIP|NATIONALITY|VISA STATUS|MARITAL STATUS|DATE OF BIRTH"
+    r"|PERSONAL DETAILS|GENDER)\b"
+)
+NO_HOME_BLOCK_RE = re.compile(
+    r"^(?:SELECTED MEDIA|MEDIA COVERAGE|MEDIA APPEARANCES|MEDIA MENTIONS"
+    r"|PRESS COVERAGE|PRESS MENTIONS|IN THE MEDIA)\b"
+)
+
+# A real citation carries its own unmistakable shape: a quoted title, a
+# "Volume"/"Vol." marker, or a trailing publication year. A bare outlet
+# name has none of these. Used only to know where a media-mentions block
+# ENDS once NO_HOME_SUBHEADING_RE has found where one begins -- content
+# that looks like a real citation stops the reroute even though no new
+# heading interrupted it, so a media list immediately followed by a real,
+# unheaded publication is never swept up by mistake.
+_CITATION_SHAPED_RE = re.compile(
+    r"[“”\"]|,\s*(?:19|20)\d{2}\b|\((?:19|20)\d{2}\)|\bvol(?:ume)?\.?\s*\d",
+    re.IGNORECASE,
+)
+
+
+def _reroute_no_home_subheadings(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Move content headed by a known no-home label to Unmapped.
+
+    Rather than guess a section for content the template has no place for
+    at all, this surfaces it for HR review exactly the way the Unmapped
+    safety net already presents genuinely orphaned content -- see
+    unmapped.py's build_unmapped_items, whose {"value", "context"} field
+    shape this matches so the two read identically in the review screen.
+
+    The item carrying the marker always moves. For a marker that opens a
+    whole BLOCK of no-home content rather than a single fact (a media
+    list, as opposed to a one-line citizenship fact), subsequent items in
+    the SAME section immediately following it are moved too, stopping at
+    the first one that looks like a real citation -- see
+    _CITATION_SHAPED_RE -- or at a change of section, whichever comes
+    first.
+    """
+    letterhead_sections = {"full_name", "email", "contact_info", "job_title", "profiles_links"}
+    active_section: str | None = None
+    for item in items:
+        if item["section"] in letterhead_sections:
+            active_section = None
+            continue
+        text = item.get("source_text", "")
+        prefix = _normalize_heading(text[:40])
+        if NO_HOME_SINGLE_FACT_RE.match(prefix):
+            reroute = True
+            active_section = None  # this label covers only itself, not what follows
+        elif NO_HOME_BLOCK_RE.match(prefix):
+            reroute = True
+            active_section = item["section"]
+        elif active_section and item["section"] == active_section and not _CITATION_SHAPED_RE.search(text):
+            reroute = True
+        else:
+            reroute = False
+            active_section = None
+        if not reroute:
+            continue
+        item["section"] = "unmapped"
+        item["fields"] = {"value": text, "context": "no MDX section for this content"}
+        item["confidence"] = min(item.get("confidence", 0.5), 0.5)
+        item["validation_flags"] = sorted(
+            set(item.get("validation_flags", [])) | {"no_home_heading"}
+        )
+    return items
+
+
 def _role_text_before_dates(text: str) -> str:
     """The role/title part of an entry, i.e. everything before the trailing
     date column. Still a verbatim prefix of the source line."""
@@ -3733,6 +3827,7 @@ def classify_rule_based(cv_text: str, source_document: str) -> list[dict[str, An
     # with the template's own heading text are left untouched.
     items = routing.apply_routing(items, authoritative)
     items = _reclassify_resume_crosstalk(items)
+    items = _reroute_no_home_subheadings(items)
     items = _promote_present_role(items)
     items = _clean_job_titles(items)
 

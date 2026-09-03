@@ -4,7 +4,7 @@ chosen specifically because its headings and layout convention differ
 completely from the MDX template, stress-testing generic classification
 rather than a CV already close to the template's own structure.
 
-Two distinct bugs:
+Four distinct bugs:
 
   1. identifiers.find_identifiers took the FIRST match for a platform,
      regardless of how good it was. A CV that spells its LinkedIn out
@@ -22,6 +22,15 @@ Two distinct bugs:
      unreadable item, and everything from that job entry onward kept
      accumulating under language_proficiency for several MORE entries
      until something else broke the streak by luck.
+  3. A "CITIZENSHIP" side-heading -- not a heading the MDX template
+     recognises at all, and with nowhere in the template it could
+     correctly go -- silently became content of whatever Employment entry
+     happened to precede it, reading as a bizarre non-sequitur inside a
+     real job entry's text.
+  4. A "SELECTED MEDIA" sub-heading, followed by a plain list of outlet
+     names the person was interviewed by (not his own work), silently
+     became Publications -- indistinguishable in the output from his
+     actual peer-reviewed articles and books.
 
 Run directly: python test_siko_language_and_identifiers.py
 """
@@ -96,6 +105,64 @@ def test_two_genuine_language_entries_still_split_apart():
         section_key="language_proficiency",
     )
     assert len(grouped) == 2
+
+
+# --- Bug 3: a no-home personal-detail heading absorbed into Employment ---
+
+def test_citizenship_heading_content_rerouted_to_unmapped():
+    items = [
+        {"section": "previous_employment", "fields": {}, "source_text": "Some real duty sentence.", "confidence": 0.7},
+        {"section": "previous_employment", "fields": {}, "source_text": "CITIZENSHIP USA/France UAE Golden Visa holder", "confidence": 0.7},
+        {"section": "previous_employment", "fields": {}, "source_text": "Managed a multinational team across the region.", "confidence": 0.7},
+    ]
+    result = rc._reroute_no_home_subheadings(items)
+    assert result[0]["section"] == "previous_employment"
+    assert result[1]["section"] == "unmapped"
+    assert result[1]["fields"]["value"] == "CITIZENSHIP USA/France UAE Golden Visa holder"
+    # A different section right after the marker must not be swept up too --
+    # the reroute is scoped to the SAME section as the marker itself.
+    assert result[2]["section"] == "previous_employment"
+
+
+# --- Bug 4: a media-mentions list absorbed into Publications --------------
+
+def test_selected_media_block_rerouted_but_selected_articles_left_alone():
+    items = [
+        {"section": "publications", "fields": {}, "confidence": 0.8, "source_text":
+            'SELECTED ARTICLES "A Real Article Title", Some Journal (Somewhere), Volume 1, No. 2, 2020'},
+        {"section": "publications", "fields": {}, "confidence": 0.8, "source_text":
+            "SELECTED MEDIA Outlets for interviews and published articles include:"},
+        {"section": "publications", "fields": {}, "confidence": 0.8, "source_text":
+            "African Business Review The Cipher Brief (US) News24 (South Africa)"},
+        {"section": "publications", "fields": {}, "confidence": 0.8, "source_text":
+            "BBC World Service Voice of America"},
+    ]
+    result = rc._reroute_no_home_subheadings(items)
+    # A genuine subgroup of Publications must never be touched.
+    assert result[0]["section"] == "publications"
+    # The whole media-mentions block, marker plus every following bare
+    # outlet-name line, must move.
+    assert result[1]["section"] == "unmapped"
+    assert result[2]["section"] == "unmapped"
+    assert result[3]["section"] == "unmapped"
+
+
+def test_a_real_citation_after_a_media_block_is_not_swept_up():
+    # A safety valve: if a media list is somehow followed by a real,
+    # unheaded citation with no new section in between, the citation's own
+    # shape (a quoted title, in this case) must stop the reroute.
+    items = [
+        {"section": "publications", "fields": {}, "confidence": 0.8, "source_text":
+            "SELECTED MEDIA Outlets for interviews include:"},
+        {"section": "publications", "fields": {}, "confidence": 0.8, "source_text":
+            "African Business Review The Cipher Brief (US)"},
+        {"section": "publications", "fields": {}, "confidence": 0.8, "source_text":
+            '"A Later Real Article", Some Journal, Volume 3, No. 1, 2021'},
+    ]
+    result = rc._reroute_no_home_subheadings(items)
+    assert result[0]["section"] == "unmapped"
+    assert result[1]["section"] == "unmapped"
+    assert result[2]["section"] == "publications"
 
 
 if __name__ == "__main__":
