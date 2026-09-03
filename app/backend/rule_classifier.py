@@ -3215,6 +3215,15 @@ def _clean_job_titles(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         value = item["fields"].get("value", "")
         if not isinstance(value, str) or "\n" in value:
             continue
+        # A letterhead title routinely carries its own trailing date column
+        # ("Senior Lecturer, ... | 2026 onwards") that _extract_letterhead
+        # has no reason to strip -- it is a genuine part of the letterhead
+        # line, just not part of the job title itself. Left in, it sits
+        # after "Campus" and defeats TRAILING_INSTITUTION_RE's end anchor
+        # below, so the institution/campus tail is never recognised as
+        # trailing anything and survives uncleaned into the final title.
+        original_value = value
+        value = PIPE_SPLIT_RE.split(value)[0].strip() or value
         match = ADMIN_TITLE_CONNECTOR_RE.search(value)
         if match:
             first = _strip_trailing_institution(value[:match.start()].rstrip(" ,"))
@@ -3228,12 +3237,17 @@ def _clean_job_titles(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
             )
         else:
             stripped = _strip_trailing_institution(value)
-            if stripped and stripped != value:
+            if stripped and stripped != original_value:
                 item["fields"]["value"] = stripped
                 item["confidence"] = min(item.get("confidence", 0.7), 0.65)
                 item["validation_flags"] = sorted(
                     set(item.get("validation_flags", [])) | {"institution_stripped_from_title"}
                 )
+            elif value != original_value:
+                # No institution tail to strip, but the trailing date column
+                # was still real leftover debris that must not survive into
+                # the stored title.
+                item["fields"]["value"] = value
     return items
 
 
@@ -3507,15 +3521,28 @@ def _promote_present_role(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     # A present_employment item can already exist without ever going
     # through the "promotion" path below -- e.g. _generic_employment's own
     # "is_current and the employer name matches" check routes it there
-    # directly. That item's own parsed title is still more trustworthy than
+    # directly. That item's own parsed title is a reasonable fallback for
     # whatever the letterhead scan guessed from nearby text (a nearby
     # fellowship or scholarship line matching a title keyword by
-    # coincidence, say), so the same override applies even when nothing
-    # here needs to be "promoted" -- only the job_title guess is fixed.
-    existing_present = next((it for it in items if it["section"] == "present_employment"), None)
+    # coincidence, say) -- MOST of the time. The exception is a person who
+    # holds several genuinely concurrent "present" roles: there, no single
+    # entry is more "current" than the others, so picking whichever
+    # happened to be listed first in the source is close to arbitrary, and
+    # overriding a real, deliberately multi-title letterhead ("Lecturer in
+    # Film, Digital Media and PG Programmes", explicitly the first of four
+    # titles printed directly under the person's name) with an unrelated
+    # one (a side venture that simply came first in the Present Employment
+    # section) is worse than keeping what the letterhead already said. With
+    # only ONE present-employment entry there is no such ambiguity, and it
+    # is almost always the SAME role the letterhead names too, just spelled
+    # out in more detail -- there the override stays the right call.
+    present_items = [it for it in items if it["section"] == "present_employment"]
+    existing_present = present_items[0] if present_items else None
     if existing_present:
+        has_job_title = any(it["section"] == "job_title" for it in items)
+        ambiguous = len(present_items) > 1
         title = (existing_present.get("fields") or {}).get("title", "").strip()
-        if title:
+        if title and not (has_job_title and ambiguous):
             items = [i for i in items if i["section"] != "job_title"]
             items.append({
                 "section": "job_title", "fields": {"value": title},
@@ -3544,6 +3571,10 @@ def _promote_present_role(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         it["section"] = "present_employment"
         if "employer" in fields:
             fields["unit"] = fields.pop("employer")
+        # Exactly one role is ever promoted here (the loop returns on its
+        # first match), so there is no multi-concurrent-role ambiguity to
+        # defer to the letterhead over -- this is the same single-role case
+        # branch 1 above still overrides unconditionally.
         items = [i for i in items if i["section"] != "job_title"]
         items.append({
             "section": "job_title", "fields": {"value": title},
@@ -3566,9 +3597,9 @@ def _promote_present_role(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "source_text": text,
             "confidence": 0.6,
         })
-        # The title on the CV's own current-role line beats anything the
-        # letterhead scan guessed from text near the email address, so it
-        # replaces an earlier guess rather than deferring to it.
+        # This loop breaks on its first match, so -- like branch 2 above --
+        # exactly one role is ever derived here; no multi-role ambiguity to
+        # defer to the letterhead over.
         items = [i for i in items if i["section"] != "job_title"]
         items.append({
             "section": "job_title", "fields": {"value": role},
