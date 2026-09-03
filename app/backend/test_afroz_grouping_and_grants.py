@@ -70,6 +70,13 @@ _structure_grants:
       "...portfolio exceeding USD 200M in combined enterprise value..."
       never appeared anywhere in the generated document, even though the
       title/employer/dates around them were parsed perfectly correctly.
+  12. A role held simultaneously with another is marked "(2025 - present,
+      concurrent)" -- but YEAR_RANGE_RE's match ended right after
+      "present", leaving ", concurrent)" as leftover text on the content
+      side. Bug 11's own new _line_override fix then dutifully preserved
+      it -- but as "concurrent) Independent studio, academy..." with a
+      dangling, unmatched ")" at the front, reading as though the real
+      sentence after it had been cut off mid-word.
 
 Run directly: python test_afroz_grouping_and_grants.py
 """
@@ -371,6 +378,35 @@ def test_short_clean_entry_gets_no_spurious_override():
     text = "Senior Lecturer, Middlesex University Dubai (2020 - 2022)"
     fields = rc._extract_employment_fields(text, "employer")
     assert "_line_override" not in fields
+
+
+# --- Bug 12: a ", concurrent)" qualifier left dangling on the content side
+
+def test_concurrent_qualifier_is_consumed_by_the_date_match():
+    text = (
+        "Founder, point a.cademy, Dubai, United Arab Emirates (2025 - present, concurrent) "
+        "Independent studio, academy and creative community delivering industry-led programmes."
+    )
+    m = rc.YEAR_RANGE_RE.search(text)
+    assert m is not None
+    assert m.group(2) == "present"
+    after = text[m.end():].strip(" ,:|()[]-–—")
+    assert after.startswith("Independent studio")
+    assert "concurrent" not in after
+
+
+def test_concurrent_qualifier_does_not_break_the_generated_line_override():
+    text = (
+        "Founder and Chief Creative Officer, Not an Agency Inc., Dubai, United Arab Emirates "
+        "(2018 - present, concurrent) Multidisciplinary creative studio and personal consultancy, "
+        "creative direction and strategy for a long list of major international clients across "
+        "several continents and industries worldwide"
+    )
+    fields = rc._extract_employment_fields(text, "employer")
+    assert fields["title"].startswith("Founder and Chief Creative Officer")
+    override = fields.get("_line_override", "")
+    assert not override.split("\n")[-1].startswith("concurrent)")
+    assert override.split("\n")[-1].startswith("Multidisciplinary creative studio")
 
 
 if __name__ == "__main__":

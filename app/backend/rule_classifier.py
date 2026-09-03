@@ -101,7 +101,15 @@ YEAR_RANGE_RE = re.compile(
     # "to" above is already consumed as the separator, so without this
     # alternative "date" itself was left dangling, glued onto the front of
     # whatever line followed ("...2023 to date Founder of a specialist...").
-    rf"({_DATE_PART}|\d{{2}}|present(?:\s+time)?|current(?:\s+date)?|onwards?|date)?",
+    rf"({_DATE_PART}|\d{{2}}|present(?:\s+time)?|current(?:\s+date)?|onwards?|date)?"
+    # "(2025 - present, concurrent)" -- a CV marking a role as held
+    # simultaneously with another. Without consuming this trailing
+    # qualifier as part of the date match, it was left dangling after the
+    # date range ended: "...(2025 - present) concurrent) Independent
+    # studio..." split the sentence in two, with the ")" from "concurrent)"
+    # now unmatched and the real content after it read as though it opened
+    # mid-word.
+    r"(?:\s*,\s*concurrent(?:ly)?)?",
     re.IGNORECASE,
 )
 YEAR_IN_TEXT_RE = re.compile(r"\d{4}")
