@@ -95,8 +95,12 @@ YEAR_RANGE_RE = re.compile(
     rf"({_DATE_PART})\s*(?:[-–—]|\bto\b)\s*"
     # "to present time", "to current date": CVs sometimes qualify "present"
     # with a trailing noun. Without matching it, "time"/"date" is left
-    # dangling in front of the employer name on the role side.
-    rf"({_DATE_PART}|\d{{2}}|present(?:\s+time)?|current(?:\s+date)?|onwards?)?",
+    # dangling in front of the employer name on the role side. Bare "date"
+    # is its own common phrasing too ("2023 to date") -- the connecting
+    # "to" above is already consumed as the separator, so without this
+    # alternative "date" itself was left dangling, glued onto the front of
+    # whatever line followed ("...2023 to date Founder of a specialist...").
+    rf"({_DATE_PART}|\d{{2}}|present(?:\s+time)?|current(?:\s+date)?|onwards?|date)?",
     re.IGNORECASE,
 )
 YEAR_IN_TEXT_RE = re.compile(r"\d{4}")
@@ -378,7 +382,37 @@ def _is_junk_line(text: str) -> bool:
     # becomes its own bare, ugly bullet under whatever section it landed in
     # ("S T R E N G T H A N D") rather than being silently absorbed the way
     # a resolved heading fragment already is.
-    return _is_whole_line_letter_spaced(stripped)
+    if _is_whole_line_letter_spaced(stripped):
+        return True
+    return _is_concatenated_headings_line(stripped)
+
+
+def _is_concatenated_headings_line(text: str) -> bool:
+    """A line made up of two or more official section headings glued
+    together with no separator at all. Happens when the source CV is
+    itself written in the MDX template and several consecutive sections
+    were left completely empty -- whatever produced the source file merged
+    their headings onto one physical line ("CONTRIBUTION TO MDX CENTRES OF
+    EXCELLENCE/RESEARCH LAB RESEARCH GRANTS, FUNDING AND CONSULTANCY
+    PROJECTS EDITORIAL BOARD MEMBERSHIPS..."). Left unfiltered, this reads
+    as ordinary content and gets glued onto whatever real item happened to
+    precede it -- three empty sections' worth of boilerplate silently
+    dressed up as one bullet under Awards. Recognised by peeling a known
+    heading off the front, repeatedly, until nothing or an unrecognised
+    remainder is left; a single recognised heading is left alone (that is
+    just an ordinary, real heading, handled elsewhere)."""
+    remaining = _normalize_heading(text)
+    matches = 0
+    while remaining:
+        matched_phrase = next(
+            (p for p in _HEADINGS_BY_LENGTH_DESC if remaining.startswith(p)),
+            None,
+        )
+        if not matched_phrase:
+            return False
+        remaining = remaining[len(matched_phrase):].strip()
+        matches += 1
+    return matches >= 2
 
 
 # "142 Your Address Blvd." -- a candidate filled in their real name, skills
@@ -588,6 +622,10 @@ def _official_headings() -> dict[str, str]:
 
 
 _OFFICIAL_HEADINGS = _official_headings()
+# Longest phrase first, so greedy prefix-matching in
+# _is_concatenated_headings_line never stops at a shorter heading that
+# happens to also be a prefix of a longer one.
+_HEADINGS_BY_LENGTH_DESC = sorted(_OFFICIAL_HEADINGS, key=len, reverse=True)
 _SYNONYM_LOOKUP: list[tuple[str, str]] = [
     (phrase, key) for key, phrases in SYNONYM_HEADINGS.items() for phrase in phrases
 ]
@@ -802,7 +840,17 @@ def _find_heading_key(line: str) -> str | None:
 
 SENTENCE_END_RE = re.compile(r"[.!?]\s*$")
 ENTRY_END_YEAR_RE = re.compile(
-    r"(?:\d{4}|\d{2})\s*(?:[-–—]\s*(?:\d{4}|\d{2}|present|current|onwards))?\s*$",
+    # A trailing ")" is common ("(2023 - present)") and was previously fatal
+    # to this match: the pattern had to reach end-of-string right after the
+    # year/marker, with no allowance for the closing bracket the date was
+    # written inside. That silently disabled this entry-boundary signal for
+    # every CV that parenthesises its dates, welding each new entry onto
+    # the tail of the one before it.
+    #
+    # The leading (?<!\d) matters too: without it, a plain monetary amount
+    # ending "...00" ("AED 15,000") had its last two digits mistaken for a
+    # 2-digit year, turning an ordinary detail line into a bogus new entry.
+    r"(?<!\d)(?:\d{4}|\d{2})\s*(?:[-–—]\s*(?:\d{4}|\d{2}|present|current|onwards))?\s*\)?\s*$",
     re.IGNORECASE,
 )
 PRESENT_ROLE_RE = re.compile(r"\b(?:onwards?|present|current(?:ly)?|to date)\b", re.IGNORECASE)
@@ -1156,6 +1204,21 @@ def _group_into_items(body_lines: list[str], section_key: str | None = None) -> 
             or EMAIL_RE.search(current[-1]) or find_phone(current[-1])
             or _forces_new_item(line)
             or _starts_list_item(text, current[-1])
+            # A bare (non-bulleted) job-title line interrupting a run of
+            # bulleted duties must still start a new entry. Real CVs
+            # commonly mix the two: an unbulleted "Job Title" / "Employer,
+            # dates" header pair, with bulleted duties underneath -- and
+            # without this, an unbulleted title line right after the
+            # PREVIOUS entry's last bullet (with no date column of its own
+            # for ENTRY_END_YEAR_RE above to catch) welds onto that bullet's
+            # tail instead of opening its own entry. Scoped to bulleted mode
+            # specifically: there, only a new bullet is normally allowed to
+            # start an item, so an unbulleted line shaped like a title is
+            # never itself a continuation of one.
+            or (
+                has_bullets and not BULLET_START_RE.match(line)
+                and _has_title_keyword(text) and _looks_like_job_title(text)
+            )
             # Both neighbours must match, not just this line -- a one-off
             # sentence that happens to contain a single dash ("Led the
             # Q3 rollout - on time and under budget.") must not split on
@@ -1176,9 +1239,29 @@ def _group_into_items(body_lines: list[str], section_key: str | None = None) -> 
             # that opens lowercase is left alone, since that shape is a
             # wrapped continuation of the previous skill, not a new one.
             or (
-                section_key == "skills" and not has_bullets
-                and text[:1].isupper()
+                section_key in ("skills", "awards") and not has_bullets
+                # Not "isupper()" specifically -- a real new entry can also
+                # open with a digit ("100+ international awards..."), which
+                # isn't upper OR lower case. Only an actual lowercase start
+                # is the wrapped-continuation shape this must stay silent on.
+                and not text[:1].islower()
                 and not EMPLOYER_LOCATION_YEAR_TAIL_RE.match(text)
+            )
+            # Same shape, same fix, for committees and academic leadership --
+            # but these two sections also legitimately contain a SHORT title
+            # line with no date at all ("MDX Wellness Centre - Contributor")
+            # immediately followed by ITS OWN description sentence. That
+            # description also opens uppercase, so the plain rule above would
+            # wrongly split a title from its own description. Gated on
+            # current[-1] already being substantial (a real, complete entry
+            # is never this short) -- a short title-only line stays silent,
+            # letting the ordinary sentence-boundary fallback correctly weld
+            # its description onto it instead.
+            or (
+                section_key in ("committees", "academic_leadership") and not has_bullets
+                and not text[:1].islower()
+                and not EMPLOYER_LOCATION_YEAR_TAIL_RE.match(text)
+                and len(current[-1]) > 50
             )
             # A "LANGUAGES" heading with no bullet glyphs extracts its real
             # content as one short, unpunctuated line ("English Malayalam").
@@ -2216,7 +2299,7 @@ def _extract_employment_fields(line: str, employer_key: str) -> dict[str, Any]:
 
     end_raw = (m.group(2) or "").strip()
     ongoing = end_raw.lower() in (
-        "present", "present time", "current", "current date", "onward", "onwards",
+        "present", "present time", "current", "current date", "onward", "onwards", "date",
     )
     end_year_match = YEAR_IN_TEXT_RE.search(end_raw)
     if ongoing or not end_raw:
@@ -2272,7 +2355,19 @@ def _extract_employment_fields(line: str, employer_key: str) -> dict[str, Any]:
     # the other side is a short, clean fragment, the short side is the
     # actual title/employer pair and is preferred instead.
     after_is_narrative = bool(re.search(r"[.!?]\s+\S", after)) or len(after) > 60
-    before_is_usable = bool(before) and not DATE_REMNANT_RE.match(before) and len(before) <= 60
+    # 60 was too tight for a genuinely long but clean title/employer/location
+    # combination ("Founder and Chief Creative Officer, Not an Agency Inc.,
+    # Dubai, United Arab Emirates" -- 90 chars, no sentence-shaped prose
+    # anywhere in it) -- it was losing to a run-on narrative side hundreds of
+    # characters long purely because "before" ran a little past 60. Raised
+    # to 100, which a real title/employer/location line rarely exceeds,
+    # while genuine narrative prose (checked separately, right below) still
+    # gets excluded regardless of length once it actually reads like a
+    # sentence.
+    before_is_usable = (
+        bool(before) and not DATE_REMNANT_RE.match(before) and len(before) <= 100
+        and not re.search(r"[.!?]\s+\S", before)
+    )
     if after and not DATE_REMNANT_RE.match(after) and not (after_is_narrative and before_is_usable):
         rest = after
     else:
@@ -2695,27 +2790,74 @@ def _extract_qualification_fields(text: str) -> dict[str, Any]:
     return fields
 
 
+# The MDX template's own grants section literally prompts for these five
+# fields by name ("Project title, Role, Duration, Funding or External
+# Agency" -- plus "Value to the University" some CVs add themselves). A CV
+# that fills the template directly writes ONE of these exact label words
+# per line, e.g. "Role: Producer and Studio Liaison, MDX Studios" -- a
+# completely different shape from the free-form "Consultant: <project
+# title>" header _structure_grants was originally built for, where the
+# label IS the role rather than naming a field. Checked first, and more
+# specifically, so this never gets misread by the older, looser fallback:
+# without it, EVERY labelled line was treated as its own new grant entry
+# with the label word itself stored as the "role" and the real value
+# mislabelled as "project_title" -- five entries per real project, each
+# scrambled ("Role: Project Title" / "Project Title: <actual role text>").
+GRANT_FIELD_LABEL_RE = re.compile(
+    r"^(Project\s*Title|Role|Duration|Funding(?:\s+or\s+External\s+Agency)?|"
+    r"Value\s+to\s+the\s+University)\s*:\s*(.*)$",
+    re.IGNORECASE,
+)
+_GRANT_FIELD_NAMES = {
+    "project title": "project_title",
+    "role": "role",
+    "duration": "duration",
+    "funding": "funding_agency",
+    "funding or external agency": "funding_agency",
+    "value to the university": "value_to_university",
+}
+
+
 def _structure_grants(body_items: list[str]) -> list[dict[str, Any]]:
     """Turn a funded-projects block into one structured item per project.
 
-    CVs write these as a titled header followed by loose detail lines:
-        Consultant: "Teaching at the Right Level (TaRL)..."
-        - Co-PI with Prof X and Dr Y (Funded by FCDO/DARE-RC, 2025-26)
-        - Qualitative research lead and project manager
-    The MDX template wants project_title / role / duration / funding_agency
-    as distinct fields, so the header supplies the role and title, and the
-    "(Funded by ..., dates)" parenthetical -- wherever it appears among the
-    detail lines -- supplies the funder and duration.
+    Two source shapes, checked in order:
 
-    `source_text` stays the verbatim header line: the detail lines carry
-    bullet markers in the original, so stitching them together would no
-    longer be an exact substring of the CV and would (correctly) be dropped
-    by the no-fabrication check.
+    1. The MDX template's own explicit field labels -- see
+       GRANT_FIELD_LABEL_RE above. "Project Title:" opens a new entry;
+       "Role:", "Duration:", "Funding...:" and "Value to the University:"
+       add a field to whichever entry is currently open.
+
+    2. CVs that instead write a titled header followed by loose detail
+       lines:
+           Consultant: "Teaching at the Right Level (TaRL)..."
+           - Co-PI with Prof X and Dr Y (Funded by FCDO/DARE-RC, 2025-26)
+           - Qualitative research lead and project manager
+       Here the header supplies the role and title, and the "(Funded by
+       ..., dates)" parenthetical -- wherever it appears among the detail
+       lines -- supplies the funder and duration.
+
+    `source_text` stays a verbatim line from the CV: the detail lines
+    commonly carry bullet markers in the original, so stitching several
+    together would no longer be an exact substring and would (correctly)
+    be dropped by the no-fabrication check.
     """
     grants: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
 
     for text in body_items:
+        field_match = GRANT_FIELD_LABEL_RE.match(text)
+        if field_match:
+            label = " ".join(field_match.group(1).split()).lower()
+            value = field_match.group(2).strip().strip('“”"“”')
+            field_name = _GRANT_FIELD_NAMES.get(label)
+            if field_name == "project_title" or current is None:
+                current = {"fields": {}, "source_text": text}
+                grants.append(current)
+            if field_name and value:
+                current["fields"][field_name] = value
+            continue
+
         label_match = ENTRY_LABEL_RE.match(text)
         if label_match and ":" in text:
             role, _, title = text.partition(":")

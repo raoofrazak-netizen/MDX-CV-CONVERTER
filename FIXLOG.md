@@ -13,6 +13,26 @@ cd app/backend && python test_corpus.py
 
 ---
 
+## 2026-09-03 — A genuine staff CV written directly in the MDX template: six real data-loss defects found by deep-auditing source vs. converted output
+
+Requested explicitly: a side-by-side audit of a real converted CV against
+its source, checking for missing/corrupted data rather than waiting for it
+to surface CV-by-CV. Found six distinct bugs, all in grouping/boundary
+detection and grants field-parsing — none in extraction, which read every
+byte of the source correctly. Regression tests in
+`app/backend/test_afroz_grouping_and_grants.py`. Suite: 54/59 passing
+throughout (5 pre-existing failures, confirmed via `git stash` to predate
+this session's changes, unrelated to any of these fixes).
+
+| Defect | Cause | Fix |
+|---|---|---|
+| All 11 Awards entries welded into one unreadable item | An unbulleted, one-fact-per-line block has no punctuation for sentence-boundary grouping to split on — the same class of bug already fixed for `skills`, never extended to `awards` | Extended the existing skills-only boundary rule to `awards` too; also broadened it from `isupper()` to "not lowercase" so an entry starting with a digit ("100+ international awards...") is caught as well |
+| Committees and Academic Leadership each missing 2 of 3 real entries | Same shape as above, but these two sections also legitimately contain a short title-only line ("MDX Wellness Centre – Contributor") immediately followed by its own description — a blanket fix would wrongly split a title from its own description, since the description also opens uppercase | New rule scoped to these two sections specifically, gated on the accumulated text already being substantial (`len(current[-1]) > 50`) before treating an uppercase-starting line as a new entry — a short title-only line stays silent, letting it correctly absorb its own following description |
+| Three previous-employment title lines silently dropped (only their duty text survived) | `ENTRY_END_YEAR_RE` (the "this entry's date column just ended" boundary signal) required end-of-string immediately after the year/marker — a trailing `)` from a parenthesised date ("(2023 - present)") was fatal to the match, silently disabling entry-splitting for every CV that parenthesises its dates | Added an optional trailing `\)?` to the pattern |
+| An unrelated detail line ("2017: 25-seat theatre... \| AED 15,000") became its own bogus entry | The same regex fix above made it newly reachable — but it then false-positived on an ordinary amount ending "00", mistaking the last two digits for a 2-digit year | Added `(?<!\d)` before the year pattern, so a digit immediately before it disqualifies the match |
+| Research Grants: 4 real funded projects turned into ~29 scrambled fragments, field labels and values swapped (`"Role: Project Title"` / `"Project Title: <actual role text>"`) | `_structure_grants` was built for a CV that writes a single combined header ("Consultant: <project title>") — it had no concept of a CV that instead labels every field explicitly, the way the blank MDX template itself prompts for them ("Project Title:", "Role:", "Duration:", "Funding or External Agency:", "Value to the University:"). Every one of those labelled lines was read as its own new grant, with the label word stored as `role` and the real value mislabelled `project_title` | New `GRANT_FIELD_LABEL_RE`, checked first and more specifically: recognises the five real field-label words, opens a new entry only on "Project Title:", and adds every other labelled line as a field on whichever entry is currently open. The older single-header convention still works unchanged for CVs that use it |
+| A long-but-clean title/employer/location line ("Founder and Chief Creative Officer, Not an Agency Inc., Dubai, United Arab Emirates") lost to a 300+ character client-list description, which got stored as the person's job title | `_extract_employment_fields`'s "which side of the date is the real title" heuristic used a flat 60-character cutoff — too tight for a legitimately long but normal title/employer/location combination | Raised the cutoff to 100 and added an explicit check that the "before" side doesn't itself read as a sentence (`[.!?]\s+\S`), so the fix targets long-but-clean text specifically rather than just any long text |
+
 ## 2026-09-02 — A psychology-department résumé with a scrambled two-column layout: seven code defects, plus one standing data-integrity issue
 
 Live-tested against a real requested conversion. Suite: **36/38 passing**
