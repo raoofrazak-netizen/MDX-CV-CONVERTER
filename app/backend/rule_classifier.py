@@ -271,7 +271,7 @@ TITLE_KEYWORDS = [
     "consultant", "technician", "executive", "officer", "associate",
     "supervisor", "developer", "designer", "architect", "support",
     "teacher", "tutor", "nurse", "assistant", "intern", "clerk", "advisor",
-    "trainee",
+    "trainee", "economist", "scientist", "strategist", "accountant",
 ]
 
 # A plain "kw in text.lower()" substring check false-positives badly --
@@ -1093,7 +1093,20 @@ def _starts_list_item(line: str, previous: str | None) -> bool:
     # onto the tail of the last responsibility, and §5's requirement that
     # career progression appear as separate entries is lost. A wrapped
     # continuation of a responsibility starts lowercase, so it is unaffected.
-    return bool(GERUND_START_RE.match(previous) and text[:1].isupper())
+    #
+    # But GERUND_START_RE only looks at the FIRST word's shape, not what it
+    # means -- "Teaching Fellow | Queen Mary University of London | London,
+    # UK" starts with "Teaching" too, a job title, not a duty sentence. Read
+    # as "a gerund list just ended", this split the title clean away from
+    # its own date line right below it ("January 2019 - September
+    # 2019|Contract" then became a fabricated entry of its own, with no
+    # title at all). A pipe-delimited title/employer/location line is never
+    # itself gerund-list content -- a real duty sentence has no reason to
+    # contain a literal "|" -- so it is excluded here regardless of what its
+    # first word happens to look like.
+    return bool(
+        GERUND_START_RE.match(previous) and text[:1].isupper() and "|" not in previous
+    )
 
 
 def _opens_with_degree(line: str) -> bool:
@@ -2498,6 +2511,17 @@ def _extract_employment_fields(line: str, employer_key: str) -> dict[str, Any]:
     # "…, August 2010 - Present" leaves the month stranded on the role side
     # once the year match is removed; it belongs to the date, not the employer.
     before = TRAILING_MONTH_RE.sub("", before).strip(" ,-–—")
+    # A work-arrangement tag ("...September 2019|Contract") sitting right
+    # after the date, not a role or employer at all -- but with nothing
+    # else on the "after" side, it looked exactly like the short, clean
+    # role text the logic below prefers, and "Contract" itself was stored
+    # as a fabricated job title. Stripped here, before "after" is judged,
+    # the same closed vocabulary BARE_EMPLOYMENT_TYPE_RE already uses for
+    # an identical tag sitting alone on its own whole line.
+    after = re.sub(
+        r"^(?:Full[\s-]?time|Part[\s-]?time|Contract|Freelance|Permanent|Temporary)\.?\s*",
+        "", after, flags=re.IGNORECASE,
+    ).strip(" ,:|()[]-–—")
 
     # "Title (Date) Employer" -- the date sits inside its own parentheses,
     # title immediately before the "(" and employer immediately after the
@@ -2528,6 +2552,37 @@ def _extract_employment_fields(line: str, employer_key: str) -> dict[str, Any]:
             fields["is_current"] = True
         fields[employer_key] = after
         return fields
+
+    # "Title | Employer | Location", with the date on its own following
+    # line (already merged onto this one by the time this function sees
+    # it) rather than inside the title line at all -- so "before" is the
+    # ENTIRE "Title | Employer | Location" run, with only one comma in it
+    # at most (right before the country, "Dubai, UAE"). The general
+    # comma-based split further down was built for a "Title, Employer"
+    # pair and has no concept of a pipe at all: it took the text after
+    # the LAST comma as "employer" and everything before it -- title,
+    # employer AND location all glued together -- as "title", discarding
+    # the real employer entirely ("Senior Lecturer | Middlesex University
+    # Dubai | Dubai, UAE" became title "...| Dubai", employer "UAE").
+    # Two or more pipe-delimited segments on "before" is unambiguous: the
+    # first is the title, and everything after it is the employer (its
+    # own trailing location segment folded in with a comma, the same way
+    # every other employer field on this system already carries one).
+    pipe_parts = [p.strip(" ,") for p in before.split("|")]
+    pipe_parts = [p for p in pipe_parts if p]
+    if len(pipe_parts) >= 2:
+        fields = {"title": pipe_parts[0], "start_date": start, "end_date": end}
+        if ongoing:
+            fields["is_current"] = True
+        fields[employer_key] = ", ".join(pipe_parts[1:])
+        if after and not DATE_REMNANT_RE.match(after) and (
+            bool(re.search(r"[.!?]\s+\S", after)) or len(after) > 60
+        ):
+            header_line = _employment_line(fields, employer_key, is_present=False)
+            if header_line:
+                fields["_line_override"] = f"{header_line}\n{after}"
+        return fields
+
     # Whichever side holds the role, ignoring a side that is only leftover
     # date debris -- otherwise a stray "26" becomes the person's job title.
     # But a merged item can carry the ENTIRE narrative paragraph after the
@@ -3779,10 +3834,31 @@ def classify_rule_based(cv_text: str, source_document: str) -> list[dict[str, An
                     continue
                 body_items = _group(zone_lines)
                 if key == "_generic_employment":
+                    # A duty bullet under an unheaded, mixed present+previous
+                    # "EXPERIENCE" list carries no date or employer of its
+                    # own -- _extract_employment_fields returns {} for it --
+                    # so the present/previous check just below, run against
+                    # its own (empty) fields, could never see the employer
+                    # name its title line just established and always fell
+                    # through to Previous Employment. A person's CURRENT
+                    # role then showed correctly under Present Employment as
+                    # a bare title with no duties at all, every one of which
+                    # silently reappeared under Previous instead. Tracked
+                    # here across entries: a bullet with no fields of its
+                    # own inherits the classification of the most recent
+                    # entry that DID have real fields (its own title line),
+                    # rather than being judged in isolation.
+                    current_target = "previous_employment"
                     for text, fields in _employment_body_entries(body_items, "employer"):
-                        employer = fields.get("employer", "").lower()
-                        is_current = not fields.get("end_date")
-                        target = "present_employment" if (is_current and "middlesex" in employer) else "previous_employment"
+                        if fields:
+                            employer = fields.get("employer", "").lower()
+                            is_current = not fields.get("end_date")
+                            current_target = (
+                                "present_employment"
+                                if (is_current and "middlesex" in employer)
+                                else "previous_employment"
+                            )
+                        target = current_target
                         if target == "present_employment" and "employer" in fields:
                             fields["unit"] = fields.pop("employer")
                         items.append({
