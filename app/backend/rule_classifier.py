@@ -28,7 +28,7 @@ from datetime import date
 import identifiers
 import routing
 from extraction import HEADER_FOOTER_MARKER
-from formatting import _employment_line
+from formatting import _employment_line, _qualification_line
 from pathlib import Path
 from typing import Any
 
@@ -2772,7 +2772,8 @@ COUNTRY_NAMES = [
     "Oman", "Jordan", "Turkey", "Poland", "Greece", "Brazil", "Mexico",
     "Russia", "Bulgaria", "Romania", "Hungary", "Portugal", "Czech Republic",
     "Ukraine", "Philippines", "Thailand", "Vietnam", "Nepal", "Lebanon",
-    "Kuwait", "Bahrain", "Iraq", "Iran", "Morocco", "Tunisia", "Algeria",
+    "Kuwait", "Bahrain", "Iraq", "Iran", "Syria", "Yemen", "Palestine",
+    "Libya", "Sudan", "Morocco", "Tunisia", "Algeria",
     "Ethiopia", "Tanzania", "Uganda", "Zimbabwe", "Argentina", "Chile",
     "Colombia", "Cyprus", "Malta", "Iceland", "Croatia", "Serbia", "Slovakia",
     "Slovenia", "Estonia", "Latvia", "Lithuania", "Luxembourg", "Scotland",
@@ -2851,6 +2852,18 @@ def _role_kind(text: str) -> str | None:
 # plainly belongs to the qualification right above it into an unrelated
 # section instead of onto the end of that qualification's own line.
 BARE_GPA_LINE_RE = re.compile(r"^(?:GPA|CGPA)\s*:?\s*[\d.]+(?:\s*/\s*[\d.]+)?\.?$", re.IGNORECASE)
+
+# A thesis title and/or supervisor, printed as its own line right under a
+# doctoral or master's degree ("Thesis Title: 'Bank Size, Locality, SME
+# Lending and Local Economies'. Supervised by Prof. Richard Werner"). Same
+# shape of problem as BARE_GPA_LINE_RE just above: read alone it carries no
+# degree, institution or year of its own, so the "no qualification signal"
+# check just below would file it under Skills as a stray sentence -- moving
+# a real, substantive detail about the qualification right above it out of
+# Qualifications entirely, with nothing left connecting it to that degree.
+THESIS_DETAIL_LINE_RE = re.compile(
+    r"^(?:thesis(?:\s+title)?\s*:|supervised\s+by\b)", re.IGNORECASE
+)
 
 # Where a subject name stops. Everything from here on is a grade, a thesis,
 # a skills list or the start of the next entry -- never part of the subject.
@@ -3884,11 +3897,23 @@ def classify_rule_based(cv_text: str, source_document: str) -> list[dict[str, An
                 # skill/summary sentence instead; same treatment biography
                 # already gets when its heading is shared with a skills list.
                 if (
-                    BARE_GPA_LINE_RE.match(text.strip())
+                    (BARE_GPA_LINE_RE.match(text.strip()) or THESIS_DETAIL_LINE_RE.match(text.strip()))
                     and items and items[-1]["section"] == "qualifications"
                 ):
                     prev = items[-1]
                     prev["source_text"] = f"{prev['source_text']} {text.strip()}".strip()
+                    # _qualification_line renders entirely from `fields`,
+                    # never from source_text -- appending to source_text
+                    # alone (as just above) keeps the verbatim record
+                    # complete but is otherwise invisible in the generated
+                    # document. A _line_override is what actually surfaces
+                    # the appended detail, the same mechanism used
+                    # elsewhere in this file for an identically-shaped
+                    # problem (see _extract_employment_fields' discarded
+                    # narrative handling).
+                    qual_line = _qualification_line(prev["fields"], prev["source_text"])
+                    if qual_line:
+                        prev["fields"]["_line_override"] = f"{qual_line}\n{text.strip()}"
                     continue
                 # A short bare line ("Fusion VFX", "Dolby Atmos
                 # Certification") directly following an already-genuine

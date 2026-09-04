@@ -13,6 +13,15 @@ cd app/backend && python test_corpus.py
 
 ---
 
+## 2026-09-04 — A fifth real CV, reported directly by the user pasting before/after qualifications text: a missing country and a vanishing thesis line
+
+Reported directly: a PhD/MSc/MSc/BSc qualifications block where the Bachelor's degree alone was missing its country, and a thesis title/supervisor line had disappeared from Qualifications entirely. Regression tests in `app/backend/test_qualification_country_and_thesis.py`. Suite: 55/62 throughout (7 pre-existing failures, confirmed via `git stash` to predate this fix and present with it reverted too).
+
+| Defect | Cause | Fix |
+|---|---|---|
+| "Bachelor of Science, Economics — Damascus University (2007)" was missing ", Syria" while three other degrees on the same CV, all at UK institutions, kept their country correctly | "Syria" was simply absent from `COUNTRY_NAMES`, the curated list `_extract_qualification_fields` matches a qualification's country against -- not a parsing bug, an incomplete list | Added `Syria`, plus four other clearly-missing, plausible countries for this system's typical Middle-East-heavy CV population (`Yemen`, `Palestine`, `Libya`, `Sudan`) |
+| A thesis title and supervisor line ("Thesis Title: '...'. Supervised by Prof. ...") printed on its own physical line right under a doctoral degree vanished from Qualifications, landing as an orphaned, context-free Skills bullet instead | The qualifications section's "no degree/institution/year signal -> reroute to Skills" check (added earlier this session for a differently-shaped problem -- bare certification-list entries) has no way to tell a thesis detail line apart from genuine stray skills prose; both lack all three signals | New `THESIS_DETAIL_LINE_RE`, matched the same way `BARE_GPA_LINE_RE` already is: merges onto the qualification entry directly above it rather than being classified on its own. Also fixed, for both this and the pre-existing GPA case: the merge previously only appended to `source_text` (which `_qualification_line` never reads from), so even the GPA merge was invisibly dropped from the rendered document; both now use a `_line_override` so the detail actually appears beneath the qualification's own summary line |
+
 ## 2026-09-03 (fifth pass) — A job-title selection bug found live-testing the Afroz Nawaf CV again, after re-uploading following the fourth audit's fixes
 
 Reported live, with a screenshot of the source letterhead: the generated document's job title showed "Founder, point a.cademy, Dubai" -- an unrelated side venture, and the LAST of four distinct titles the CV states directly under the person's name ("Lecturer in Film, Digital Media and PG Programmes" / "Head of MDX Studios (Film Programme)" / "Senior Fellow of the Higher Education Academy (SFHEA)" / "Founder, point a.cademy"). Regression test in `app/backend/test_multi_role_letterhead_title.py`. Suite: 54/59 throughout. Live-tested via the real running portal.
