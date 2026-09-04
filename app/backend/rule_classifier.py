@@ -97,14 +97,28 @@ YEAR_RANGE_RE = re.compile(
     # The 2-digit alternative on the right matters too: ranges are
     # abbreviated as "2024-26", and without it "26" is left behind the
     # same way.
-    rf"({_DATE_PART})\s*(?:[-–—]|\bto\b)\s*"
+    # A closing paren tolerated right after the start date: "Executive,
+    # Director (2024) till date" wraps only the start year in its own
+    # parentheses, with the open-ended marker following outside them on
+    # the same (already merged) line -- a different convention from
+    # "(2025 - present)", where the WHOLE range sits inside one pair.
+    # Without this, the paren broke the match immediately after the
+    # start year and the entire date -- open-ended marker included --
+    # was never recognised at all.
+    rf"({_DATE_PART})\)?\s*(?:[-–—]|\bto\b|\btill\b)\s*"
     # "to present time", "to current date": CVs sometimes qualify "present"
     # with a trailing noun. Without matching it, "time"/"date" is left
     # dangling in front of the employer name on the role side. Bare "date"
-    # is its own common phrasing too ("2023 to date") -- the connecting
-    # "to" above is already consumed as the separator, so without this
-    # alternative "date" itself was left dangling, glued onto the front of
-    # whatever line followed ("...2023 to date Founder of a specialist...").
+    # is its own common phrasing too ("2023 to date", "2023 till date") --
+    # the connecting "to"/"till" above is already consumed as the
+    # separator, so without this alternative "date" itself was left
+    # dangling, glued onto the front of whatever line followed ("...2023
+    # till date Spearheaded the international expansion..."). "Till" is
+    # the second common connector alongside "to" -- without recognising it
+    # too, the WHOLE date range failed to match at all, so an entry marked
+    # only this way (no "present"/"current" elsewhere on the line) parsed
+    # as though it had no date, and with it no way to be recognised as the
+    # person's current, ongoing role.
     rf"({_DATE_PART}|\d{{2}}|present(?:\s+time)?|current(?:\s+date)?|onwards?|date)?"
     # "(2025 - present, concurrent)" -- a CV marking a role as held
     # simultaneously with another. Without consuming this trailing
@@ -942,7 +956,18 @@ ENTRY_END_YEAR_RE = re.compile(
     r"(?<!\d)(?:\d{4}|\d{2})\s*(?:[-–—]\s*(?:\d{4}|\d{2}|present|current|onwards))?\s*\)?\s*$",
     re.IGNORECASE,
 )
-PRESENT_ROLE_RE = re.compile(r"\b(?:onwards?|present|current(?:ly)?|to date)\b", re.IGNORECASE)
+PRESENT_ROLE_RE = re.compile(r"\b(?:onwards?|present|current(?:ly)?|(?:to|till)\s+date)\b", re.IGNORECASE)
+# An open-ended marker that OPENS a line, continuing the date column of the
+# entry above it rather than starting a new one -- "Executive, Director
+# (2024)" / next physical line "till date Spearheaded the international
+# expansion..." is one entry whose start year and open-ended marker landed
+# on two different lines, not a role that ran only through 2024 followed by
+# an unrelated new entry beginning with the word "till". ENTRY_END_YEAR_RE
+# already recognises "(2024)" as a complete, closed date on its own -- this
+# is the narrow exception for when the very next line says otherwise.
+OPEN_ENDED_MARKER_LEAD_RE = re.compile(
+    r"^(?:(?:to|till)\s+date|present(?:\s+time)?|current(?:ly)?|onwards?)\b", re.IGNORECASE
+)
 TRAILING_MONTH_RE = re.compile(
     r"[\s,]*(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?"
     r"|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s*$",
@@ -1313,6 +1338,14 @@ def _group_into_items(body_lines: list[str], section_key: str | None = None) -> 
                 # every role from its employer -- the exact relationship §4
                 # of the conversion spec requires be kept intact.
                 and not _is_bare_affiliation_line(text)
+                # ...or the entry's own open-ended marker, wrapped onto its
+                # own following line ("(2024)" / "till date ..."). Without
+                # this, "(2024)" alone reads as a complete, closed date and
+                # the role is wrongly treated as having ended that same
+                # year, with "till date" -- the actual signal that it is
+                # the person's CURRENT, ongoing role -- read instead as the
+                # opening of a brand new, unrelated entry.
+                and not OPEN_ENDED_MARKER_LEAD_RE.match(text)
             )
             # A "Role: ..." / "Project Title: ..." label likewise always
             # opens a new entry rather than continuing the previous one.
@@ -3659,7 +3692,17 @@ def _promote_present_role(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     existing_present = present_items[0] if present_items else None
     if existing_present:
         has_job_title = any(it["section"] == "job_title" for it in items)
-        ambiguous = len(present_items) > 1
+        # Counting ROLES, not items: a present-employment role's own duty
+        # bullets are also filed under "present_employment" (see the
+        # _generic_employment inheritance fix above), each with fields={}
+        # since a duty line carries no title/date of its own. Counting
+        # every item inflated a single genuinely-current role with three
+        # duty bullets into "4 present entries", which read as the
+        # multi-concurrent-role case this ambiguity check exists for and
+        # wrongly deferred to the letterhead even though there was really
+        # only ONE role the whole time.
+        present_role_count = sum(1 for it in present_items if it.get("fields", {}).get("title"))
+        ambiguous = present_role_count > 1
         title = (existing_present.get("fields") or {}).get("title", "").strip()
         if title and not (has_job_title and ambiguous):
             items = [i for i in items if i["section"] != "job_title"]
@@ -3899,15 +3942,25 @@ def classify_rule_based(cv_text: str, source_document: str) -> list[dict[str, An
                     # own inherits the classification of the most recent
                     # entry that DID have real fields (its own title line),
                     # rather than being judged in isolation.
+                    # Present vs Previous is decided from fields["is_current"]
+                    # specifically, not merely "end_date is empty": the latter
+                    # is also true whenever an end date simply failed to
+                    # parse for unrelated reasons, which is not evidence the
+                    # role is ongoing. fields["is_current"] is only ever set
+                    # when an explicit open-ended marker ("present",
+                    # "current", "till date", ...) was actually found in the
+                    # text (see _extract_employment_fields) -- a real signal,
+                    # not a default. An earlier version of this check also
+                    # required the employer name to contain "middlesex",
+                    # which -- for anyone holding more than one genuinely
+                    # concurrent role, only one of them at Middlesex -- filed
+                    # every other current role under Previous regardless of
+                    # what the CV itself said.
                     current_target = "previous_employment"
                     for text, fields in _employment_body_entries(body_items, "employer"):
                         if fields:
-                            employer = fields.get("employer", "").lower()
-                            is_current = not fields.get("end_date")
                             current_target = (
-                                "present_employment"
-                                if (is_current and "middlesex" in employer)
-                                else "previous_employment"
+                                "present_employment" if fields.get("is_current") else "previous_employment"
                             )
                         target = current_target
                         if target == "present_employment" and "employer" in fields:
