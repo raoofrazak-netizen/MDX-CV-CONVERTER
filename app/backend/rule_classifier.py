@@ -32,11 +32,15 @@ from formatting import _employment_line, _qualification_line
 from pathlib import Path
 from typing import Any
 
-BULLET_CHARS = "•●▪‣⁃�–—-"  # includes en/em dash: some PDF exporters
+BULLET_CHARS = "•●▪‣⁃�–—➢➤➣❖▶▷-"  # includes en/em dash: some PDF exporters
 # (symbol/Wingdings bullet fonts mis-mapped by pypdf's text extraction) emit
 # an en-dash codepoint for what is visually a bullet glyph. A leading dash
 # at the very start of a trimmed line is not realistic as normal prose, so
-# treating it as a bullet marker here is safe.
+# treating it as a bullet marker here is safe. The arrow glyphs
+# (Wingdings 3's own arrow bullet style, "➢ Personal Info") are the same
+# story: unrecognised, a line opening with one reads as plain body text
+# continuing whatever came before it -- welding an entire unrelated
+# heading and its content onto the tail of the previous bullet.
 BULLET_START_RE = re.compile(r"^[ \t]*[" + BULLET_CHARS + r"]\s*")
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 # Leading brackets are allowed on both sides of the "+": numbers are written
@@ -843,6 +847,18 @@ def _find_heading_key(line: str) -> str | None:
     stripped = line.strip()
     if not stripped or len(stripped) > 100:
         return None
+    # No heading in this template, official or synonym, ends in a bare
+    # sentence-terminal period -- but a short synonym word can be an
+    # entirely ordinary sentence's own last word ("...evaluating student's
+    # graduation projects."), and _normalize_heading strips the period
+    # before the exact-match checks below ever see it, so without this
+    # "projects." matched the "grants" synonym "PROJECTS" exactly, even
+    # though nothing about a lowercase word ending a sentence looks like a
+    # heading. Checked before ANY match stage, not just the loose ones
+    # gated by _looks_like_heading_line further down, since this is the
+    # stage that let it through.
+    if stripped.endswith("."):
+        return None
     normalized = _normalize_heading(stripped)
 
     for phrase, key in _OFFICIAL_HEADINGS.items():
@@ -1245,7 +1261,37 @@ def _group_into_items(body_lines: list[str], section_key: str | None = None) -> 
             continue
         text = line.strip()
         if has_bullets:
-            starts_new = bool(BULLET_START_RE.match(line)) or not current
+            bullet_match = BULLET_START_RE.match(line)
+            # A SHORT bulleted line whose own text opens lowercase, directly
+            # after an accumulated line with no terminal punctuation, is
+            # not a new duty -- it is the back half of the SAME sentence,
+            # forced onto its own bullet by a bad export (a line-wrap in
+            # the source landing right on the bullet glyph). One real CV's
+            # "...supervising and evaluating student's graduation" / next
+            # bullet "projects." is one sentence run across two bullets in
+            # the document itself, not two separate responsibilities --
+            # publishing it that way reads as broken, not merely
+            # ungrammatical. A genuinely new, complete bullet always opens
+            # capitalised (or a digit/quote), so this never merges two
+            # real, separate duties.
+            #
+            # Capped to a short trailing fragment specifically -- a LONG
+            # lowercase-opening bullet is a real, separate duty far more
+            # often than it is a wrapped tail, and merging one on happened
+            # to also weld together several genuinely different, already
+            # only loosely-bounded entries elsewhere in the same document,
+            # producing text that was no longer a real contiguous quote
+            # from the source at all.
+            continuation_text = line[bullet_match.end():].strip() if bullet_match else ""
+            wrapped_bullet_continuation = bool(
+                bullet_match and current
+                and len(continuation_text) <= 30
+                and continuation_text[:1].islower()
+                and not SENTENCE_END_RE.search(current[-1])
+            )
+            starts_new = (
+                bool(bullet_match) and not wrapped_bullet_continuation
+            ) or not current
         else:
             starts_new = (
                 not current
@@ -1402,7 +1448,12 @@ def _group_into_items(body_lines: list[str], section_key: str | None = None) -> 
                 items.append(" ".join(current))
             current = [BULLET_START_RE.sub("", line).strip()]
         else:
-            current.append(text)
+            # A wrapped bullet continuation still carries its own (stray,
+            # source-artifact) bullet glyph on the front -- stripped here
+            # so it never ends up stranded mid-sentence in the merged text
+            # ("...student's graduation ➢ projects." instead of
+            # "...student's graduation projects.").
+            current.append(BULLET_START_RE.sub("", line).strip() if has_bullets else text)
     if current:
         items.append(" ".join(current))
 
